@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Antigravity 专用：非交互式内容创作流水线封装。
+"""Antigravity 专用：智能体驱动 / 分段编排式内容创作流水线封装。
 为 AI 智能体编排 HITL 流程提供 CLI 接口。
 FinOps 优化：支持增量生成和资源复用。
 """

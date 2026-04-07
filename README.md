@@ -3,7 +3,7 @@
 # ClawReel: The AI Short-Video Production Factory
 
 > **从创意到发布，只需一次对话。**
-> 这是一个专为 **AI 智能体 (Agents)** 与 **内容创作者** 打造的非交互式短视频全链路流水线。
+> 这是一个专为 **AI 智能体 (Agents)** 打造的**智能体驱动 / 分段编排式**短视频全链路流水线。
 
 ---
 
