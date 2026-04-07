@@ -1,6 +1,6 @@
 """阶段4：后期处理 - 字幕、封面、AIGC标识.
 
-字幕: Whisper 提取 + FFmpeg burn-in
+字幕: Whisper 优先提取，SRT 透传次之，FFprobe 兜底。
 封面: image-01 生成 3 张，关键内容偏上
 AIGC标识: 添加"内容由AI生成"声明
 """
@@ -9,53 +9,35 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .config import COVER_FULL, COVER_VISIBLE, OUTPUT_DIR, AIGC_CONFIG
-from .utils import ensure_parent_dir
+from .config import COVER_FULL, COVER_VISIBLE, FFMPEG_VIDEO_OPTS, OUTPUT_DIR, AIGC_CONFIG
+from .utils import ensure_parent_dir, run_ffmpeg as _run_ffmpeg
 
 logger = logging.getLogger(__name__)
 
 
-# 复用 utils.run_ffmpeg，别名以保持向后兼容
-from .utils import run_ffmpeg as _run_ffmpeg
-
-def _run_cmd(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
-    """执行 FFmpeg 命令（委托给 utils.run_ffmpeg）。"""
-    return _run_ffmpeg(cmd, check=check)
+# ── 字幕提取优先级 ─────────────────────────────────────────────────────────────
+# 1. Whisper（高质量，模型需已安装）
+# 2. FFprobe 硬字幕流（视频内嵌字幕）
+# 3. 无字幕（跳过字幕处理）
 
 
-def _extract_subtitles_whisper(video_path: Path) -> Path | None:
+def _extract_subtitles_whisper(video_path: Path, model: str = "medium", language: str = "auto") -> Path | None:
     """用 Whisper 提取字幕，保存为 SRT.
 
     Returns:
         SRT 字幕文件路径，失败返回 None
     """
+    from .subtitle_extractor import extract_subtitles
+
     srt_path = video_path.with_suffix(".srt")
-
-    # 尝试使用 whisper CLI
-    try:
-        _run_cmd([
-            "whisper",
-            str(video_path),
-            "--model", "base",
-            "--language", "zh",
-            "--output_format", "srt",
-            "--output_dir", str(video_path.parent),
-        ])
-        if srt_path.exists():
-            logger.info("✅ Whisper 字幕提取成功: %s", srt_path)
-            return srt_path
-    except (subprocess.SubprocessError, FileNotFoundError):
-        logger.warning("Whisper CLI 不可用，跳过字幕提取")
-        return None
-
-    return None
+    return extract_subtitles(video_path, srt_path, model=model, language=language)
 
 
 def _extract_subtitles_ffprobe(video_path: Path) -> Path | None:
     """用 FFmpeg 内置字幕提取（如果有硬字幕流）."""
     srt_path = video_path.with_suffix(".srt")
     try:
-        _run_cmd([
+        _run_ffmpeg([
             "ffmpeg", "-y",
             "-i", str(video_path),
             "-map", "0:s:0?",
@@ -70,20 +52,60 @@ def _extract_subtitles_ffprobe(video_path: Path) -> Path | None:
 
 
 def _burn_subtitles(video_path: Path, srt_path: Path, output_path: Path) -> Path:
-    """将 SRT 字幕烧录进视频（burn-in）."""
+    """将 SRT 字幕烧录进视频。
+
+    优先使用 ffmpeg-full 的 subtitles 滤镜（libass）烧录硬字幕；
+    若滤镜不可用，降级为 mov_text 软字幕封装。
+    使用绝对路径避免含冒号的项目路径被 FFmpeg 解析错误。
+    字体优先使用系统中文字体。
+    """
     ensure_parent_dir(output_path)
-    _run_cmd([
-        "ffmpeg", "-y",
-        "-i", str(video_path),
-        "-vf",
-        f"subtitles='{srt_path}':force_style='FontSize=24,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,Outline=2'",
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "23",
-        "-c:a", "copy",
-        str(output_path),
-    ])
-    logger.info("✅ 字幕烧录完成: %s", output_path)
+    video_abs = str(video_path.resolve())
+    srt_abs = str(srt_path.resolve())
+    out_abs = str(output_path.resolve())
+
+    # 字体：系统带的中文字体
+    font_name = "PingFang SC"
+
+    # 方案 1：subtitles 滤镜（硬字幕）
+    subtitles_ok = False
+    try:
+        _run_ffmpeg([
+            "ffmpeg", "-y",
+            "-i", video_abs,
+            "-vf",
+            f"subtitles={srt_abs}:force_style='FontName={font_name},FontSize=22,"
+            f"PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,Outline=2'",
+            *FFMPEG_VIDEO_OPTS,
+            "-c:a", "copy",
+            out_abs,
+        ])
+        if output_path.exists() and output_path.stat().st_size > 0:
+            subtitles_ok = True
+    except subprocess.SubprocessError as e:
+        logger.debug("subtitles 滤镜执行失败: %s，尝试 mov_text 封装", e)
+
+    if subtitles_ok:
+        logger.info("✅ 字幕烧录完成（硬字幕 subtitles）: %s", output_path)
+        return output_path
+
+    # 方案 2：mov_text 软字幕封装
+    try:
+        _run_ffmpeg([
+            "ffmpeg", "-y",
+            "-i", video_abs,
+            "-i", srt_abs,
+            "-c", "copy",
+            "-c:s", "mov_text",
+            out_abs,
+        ])
+    except subprocess.SubprocessError as e:
+        raise RuntimeError(f"字幕封装（mov_text）失败: {e}") from e
+
+    if output_path.exists() and output_path.stat().st_size > 0:
+        logger.info("✅ 字幕封装完成（软字幕 mov_text）: %s", output_path)
+    else:
+        raise RuntimeError(f"字幕封装失败，输出文件未生成: {output_path}")
     return output_path
 
 
@@ -107,14 +129,12 @@ def _add_aigc_watermark(
     }
     drawtext_pos = pos_map.get(position, pos_map["bottom-right"])
 
-    _run_cmd([
+    _run_ffmpeg([
         "ffmpeg", "-y",
         "-i", str(video_path),
         "-vf",
         f"drawtext=text='{label}':fontsize=20:fontcolor=white:borderw=1:bordercolor=black:{drawtext_pos}",
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "23",
+        *FFMPEG_VIDEO_OPTS,
         "-c:a", "copy",
         str(output_path),
     ])
@@ -128,6 +148,9 @@ async def post_process(
     add_subtitles: bool = True,
     add_aigc: bool = True,
     output_path: Path | None = None,
+    srt_path: Path | None = None,
+    subtitle_model: str = "medium",
+    subtitle_language: str = "auto",
 ) -> Path:
     """后期处理主流程.
 
@@ -136,6 +159,10 @@ async def post_process(
         title: 视频标题（未使用，保留向后兼容）
         add_subtitles: 是否添加字幕
         add_aigc: 是否添加 AIGC 标识
+        output_path: 输出路径（默认 output/final_原名.mp4）
+        srt_path: 已有 SRT 路径（跳过提取）
+        subtitle_model: Whisper 模型大小（default/medium/large/small/tiny）
+        subtitle_language: 字幕语言代码（auto/zh/en 等）
 
     Returns:
         处理后的视频路径
@@ -149,12 +176,31 @@ async def post_process(
 
     # 1. 字幕处理
     if add_subtitles:
-        srt_path = (
-            _extract_subtitles_whisper(video_path)
-            or _extract_subtitles_ffprobe(video_path)
-        )
-        if srt_path:
-            current = _burn_subtitles(current, srt_path, current.with_suffix("_subtitled.mp4"))
+        # 优先级：显式传入 > 同 stem SRT > Whisper 提取 > FFprobe 兜底
+        resolved_srt: Path | None = srt_path
+
+        if resolved_srt is None or not resolved_srt.exists():
+            candidate = video_path.with_suffix(".srt")
+            if candidate.exists():
+                resolved_srt = candidate
+            else:
+                # Whisper 优先（高质量）
+                resolved_srt = _extract_subtitles_whisper(
+                    video_path,
+                    model=subtitle_model,
+                    language=subtitle_language,
+                )
+                if resolved_srt is None:
+                    # FFprobe 兜底（仅提取内嵌字幕）
+                    resolved_srt = _extract_subtitles_ffprobe(video_path)
+
+        if resolved_srt and resolved_srt.exists():
+            try:
+                current = _burn_subtitles(current, resolved_srt, current.with_suffix(".subtitled.mp4"))
+            except Exception as e:
+                logger.error(f"❌ 字幕烧录失败: {e}")
+        else:
+            logger.warning("⚠️ 无可用字幕，跳过字幕烧录")
 
     # 2. AIGC 标识
     # 如果 AIGC_CONFIG 缺省或没有 label，则不添加（按用户要求：如果缺省则不添加）
@@ -175,7 +221,7 @@ async def post_process(
         current = output_path
 
     # 清理字幕中间文件（如果存在）
-    subtitled = video_path.with_suffix("_subtitled.mp4")
+    subtitled = video_path.with_suffix(".subtitled.mp4")
     if subtitled.exists():
         try:
             subtitled.unlink()

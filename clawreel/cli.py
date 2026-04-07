@@ -27,11 +27,12 @@ from .utils import CLEAN_CHAR_CLASS_RE as _CLEAN_RE
 from .script_generator import generate_script
 from .tts_voice import generate_voice
 from .video_generator import generate_video
-from .image_generator import generate_image
+from .image_generator import generate_image, generate_image_with_urls
 from .music_generator import generate_music
 from .composer import compose
 from .post_processor import post_process
 from .publisher import publish
+from .subtitle_extractor import extract_subtitles
 
 # 禁用基础日志输出到 stdout，以免干扰 JSON 解析
 logging.basicConfig(
@@ -251,12 +252,12 @@ async def cmd_script(args):
 
 async def cmd_tts(args):
     """阶段 1：配音生成。"""
-    path = await generate_voice(
+    path, srt_path = await generate_voice(
         args.text,
         voice_id=args.voice,
         provider=args.provider
     )
-    print_json({"path": str(path)})
+    print_json({"path": str(path), "srt": str(srt_path) if srt_path else None})
 
 
 async def _generate_with_finops(
@@ -310,8 +311,12 @@ async def _generate_with_finops(
 
 
 async def cmd_assets(args):
-    """阶段 2：素材生成（FinOps 优化：支持增量生成）。"""
-    # 封装任务，捕获异常并记录
+    """阶段 2：素材生成（FinOps 优化：支持增量生成）。
+
+    输出 JSON 包含：
+      - images: 本地路径列表（供 compose 使用）
+      - image_urls: OSS URL 列表（供 HITL 展示）
+    """
     async def safe_task(name, coro):
         try:
             return await coro
@@ -322,43 +327,33 @@ async def cmd_assets(args):
     output = {
         "video": None,
         "images": [],
+        "image_urls": [],
         "music": None,
         "skipped": [],
         "generated": [],
         "cost_saved": 0,
     }
 
-    # FinOps: 如果启用 skip-existing，检查现有文件
     skip_existing = getattr(args, 'skip_existing', False)
     force_regenerate = getattr(args, 'force', False)
-
-    # 标准化主题名用于匹配
     topic = getattr(args, 'topic', None)
     normalized = _normalize_topic(topic) if topic else None
-
-    await _generate_with_finops(
-        name="视频", output_key="video",
-        coro_factory=lambda: generate_video(
-            args.hook_prompt, type="t2v", 
-            duration=args.video_duration,
-            output_filename=f"hook_video_{normalized}.mp4" if normalized else None
-        ),
-        glob_pattern="hook_video_*.mp4",
-        force_regenerate=force_regenerate, skip_existing=skip_existing,
-        normalized=normalized, output=output, safe_task=safe_task, logger=logger,
-    )
-
-    # ─── 图片生成 ───
     target_count = args.count
+
+    # ─── 图片生成 ────────────────────────────────────────────────────────────
     if force_regenerate:
         logger.info(f"🔄 强制重新生成 {target_count} 张图片...")
-        images = await safe_task("图片", generate_image(args.image_prompt, count=target_count))
-        output["images"] = [str(p) for p in images] if images else []
-        output["generated"].append(f"{len(output['images'])} images")
+        result = await safe_task("图片", generate_image_with_urls(
+            args.image_prompt, count=target_count,
+            output_filename=f"img_{normalized}" if normalized else None
+        ))
+        if result:
+            output["images"] = [str(p) for p in result[0]]
+            output["image_urls"] = result[1]
+            output["generated"].append(f"{len(output['images'])} images")
     elif skip_existing and normalized:
-        # 检查现有图片
         all_images = _find_files_by_pattern(ASSETS_DIR, "img_*.png") + _find_files_by_pattern(ASSETS_DIR, "img_*.jpg")
-        existing_images = [f for f in all_images if _topic_matches(f.name, normalized)]
+        existing_images = sorted([f for f in all_images if _topic_matches(f.name, normalized)])
 
         if len(existing_images) >= target_count:
             output["images"] = [str(p) for p in existing_images[:target_count]]
@@ -374,18 +369,41 @@ async def cmd_assets(args):
 
             if need_count > 0:
                 logger.info(f"📸 生成 {need_count} 张新图片...")
-                new_images = await safe_task("图片", generate_image(
+                result = await safe_task("图片", generate_image_with_urls(
                     args.image_prompt, count=need_count,
                     output_filename=f"img_{normalized}" if normalized else None
                 ))
-                if new_images:
-                    output["images"].extend([str(p) for p in new_images])
-                    output["generated"].append(f"{len(new_images)} new images")
+                if result:
+                    new_paths, new_urls = result
+                    output["images"].extend([str(p) for p in new_paths])
+                    output["image_urls"] = new_urls
+                    output["generated"].append(f"{len(new_paths)} new images")
     else:
-        images = await safe_task("图片", generate_image(args.image_prompt, count=target_count))
-        output["images"] = [str(p) for p in images] if images else []
-        if output["images"]:
-            output["generated"].append(f"{len(output['images'])} images")
+        result = await safe_task("图片", generate_image_with_urls(
+            args.image_prompt, count=target_count
+        ))
+        if result:
+            output["images"] = [str(p) for p in result[0]]
+            output["image_urls"] = result[1]
+            if output["images"]:
+                output["generated"].append(f"{len(output['images'])} images")
+
+    # ─── Hook 视频（I2V，需首帧图片 URL） ────────────────────────────────────
+    # I2V 需要 OSS URL 作为首帧；image_urls 为空时跳过
+    hook_input_image = output["image_urls"][0] if output["image_urls"] else None
+
+    await _generate_with_finops(
+        name="视频", output_key="video",
+        coro_factory=lambda: generate_video(
+            args.hook_prompt, type="i2v",
+            duration=args.video_duration,
+            input_image=hook_input_image,
+            output_filename=f"hook_video_{normalized}.mp4" if normalized else None
+        ),
+        glob_pattern="hook_video_*.mp4",
+        force_regenerate=force_regenerate, skip_existing=skip_existing,
+        normalized=normalized, output=output, safe_task=safe_task, logger=logger,
+    )
 
     await _generate_with_finops(
         name="音乐", output_key="music",
@@ -399,26 +417,57 @@ async def cmd_assets(args):
     )
 
     # 摘要
+    # HITL：打印纯文本 URL（避免 JSON 转义 %2F）
+    if output.get("image_urls"):
+        print("\n" + "=" * 60)
+        print("📸 图片 OSS URL（HITL 展示，可直接访问）：")
+        print("=" * 60)
+        for i, url in enumerate(output["image_urls"], 1):
+            print(f"  [{i}] {url}")
+        print("=" * 60)
+
     if output["skipped"]:
         output["summary"] = f"生成 {len(output['generated'])} 项，跳过 {len(output['skipped'])} 项（节省 API 调用）"
 
+    # 打印 JSON（含 image_urls 明文）
     print_json(output)
 
 
 async def cmd_compose(args):
-    """阶段 3：音视频合成。"""
-    path = await compose(
-        tts_path=Path(args.tts),
-        image_paths=[Path(p) for p in args.images],
+    """阶段 3：多图转场音视频合成。"""
+    image_urls = args.images[:args.img_count] if args.img_count else args.images
+
+    tts_path = Path(args.tts)
+    # 自动推导 SRT：与 TTS 同 stem（Edge TTS 生成规则）
+    srt_path = tts_path.with_suffix(".srt")
+    srt_exists = srt_path.exists()
+
+    composed_path, _ = compose(
+        tts_path=tts_path,
+        image_urls=image_urls,
         music_path=Path(args.music),
-        hook_video_path=Path(args.hook) if args.hook else None
+        hook_video_path=Path(args.hook) if args.hook else None,
+        transition=args.transition,
+        srt_path=srt_path if srt_exists else None,
     )
-    print_json({"path": str(path)})
+
+    print_json({
+        "path": str(composed_path),
+        "srt": str(srt_path) if srt_exists else None,
+    })
 
 
 async def cmd_post(args):
     """阶段 4：后期处理。"""
-    path = await post_process(Path(args.video), args.title)
+    srt_path = Path(args.srt) if getattr(args, "srt", None) else None
+    path = await post_process(
+        Path(args.video),
+        args.title,
+        add_subtitles=not args.no_subtitles,
+        srt_path=srt_path,
+        subtitle_model=getattr(args, "subtitle_model", "medium"),
+        subtitle_language=getattr(args, "subtitle_language", "auto"),
+    )
     print_json({"path": str(path)})
 
 
@@ -430,6 +479,41 @@ async def cmd_publish(args):
         platforms=args.platforms
     )
     print_json({"results": results})
+
+
+async def cmd_burn_subs(args):
+    """Whisper 字幕提取 + 烧录一键命令。
+
+    等效于: whisper → 烧录硬字幕（subtitles 滤镜）
+    """
+    video_path = Path(args.video)
+    output_path = Path(args.output) if args.output else None
+
+    # 1. Whisper 提取字幕
+    srt_path = extract_subtitles(
+        video_path,
+        output_srt=Path(args.srt) if args.srt else None,
+        model=args.model,
+        language=args.language,
+        word_timestamps=args.word_timestamps,
+    )
+    if not srt_path:
+        logger.error("❌ 字幕提取失败")
+        print_json({"success": False, "error": "Whisper 字幕提取失败"})
+        return
+
+    # 2. 烧录硬字幕
+    await post_process(
+        video_path,
+        title=video_path.stem,
+        add_subtitles=True,
+        add_aigc=False,
+        output_path=output_path,
+        srt_path=srt_path,
+        subtitle_model=args.model,
+        subtitle_language=args.language,
+    )
+    print_json({"success": True, "srt": str(srt_path)})
 
 
 def main():
@@ -486,10 +570,10 @@ ClawReel - AI 短视频内容自动化流水线 (FinOps 成本优化版)
     p_assets = subparsers.add_parser("assets", help="[阶段 2] 并行生成视频回扣 (T2V)、配图和背景音乐")
     p_assets.add_argument("--hook-prompt", required=True, metavar="PROMPT", help="视频开头 6 秒的视觉提示词")
     p_assets.add_argument("--image-prompt", required=True, metavar="PROMPT", help="中间卡片图片的视觉提示词")
-    p_assets.add_argument("--count", type=int, default=3, metavar="N", help="生成的图片张数 (默认: 3)")
+    p_assets.add_argument("--count", type=int, default=9, metavar="N", help="生成的图片张数 (默认: 9，建议 9-15)")
     p_assets.add_argument("--music-prompt", default="轻快、节奏感强、适合短视频的背景音乐",
                          metavar="PROMPT", help="背景音乐风格描述")
-    p_assets.add_argument("--topic", "-t", default=None, metavar="TOPIC", 
+    p_assets.add_argument("--topic", "-t", default=None, metavar="TOPIC",
                          help="主题名称 (用于 FinOps 匹配现有资源)")
     p_assets.add_argument("--skip-existing", action="store_true",
                          help="[FinOps] 若发现同主题资源则跳过生成（推荐开启）")
@@ -503,14 +587,48 @@ ClawReel - AI 短视频内容自动化流水线 (FinOps 成本优化版)
     # ─── Phase 3: 合成 ───
     p_compose = subparsers.add_parser("compose", help="[阶段 3] 将素材组装为初始视频草稿")
     p_compose.add_argument("--tts", required=True, metavar="PATH", help="配音音频路径")
-    p_compose.add_argument("--images", nargs="+", required=True, metavar="PATH", help="卡片图片路径列表 (按序播放)")
+    p_compose.add_argument("--images", nargs="+", required=True, metavar="URL_or_PATH", help="图片 URL 或本地路径列表")
     p_compose.add_argument("--music", required=True, metavar="PATH", help="背景音乐路径")
     p_compose.add_argument("--hook", default=None, metavar="PATH", help="视频开头回扣 (mp4) 路径")
+    p_compose.add_argument("--transition", default="fade", metavar="TYPE",
+                           choices=["fade", "slide_left", "slide_right", "zoom", "none"],
+                           help="转场类型 (默认: fade，推荐 fade/zoom)")
+    p_compose.add_argument("--img-count", type=int, default=9, metavar="N",
+                           help="正文使用图片数量，默认 9")
 
     # ─── Phase 4: 后期 ───
     p_post = subparsers.add_parser("post", help="[阶段 4] 添加字幕、AIGC 标识等视觉修饰")
     p_post.add_argument("--video", required=True, metavar="PATH", help="待处理的视频草稿路径")
     p_post.add_argument("--title", required=True, metavar="STR", help="视频标题 (将用于文件名和发布元数据)")
+    p_post.add_argument("--srt", default=None, metavar="PATH",
+                        help="SRT 字幕路径（若已由 TTS 阶段生成，直接传入以跳过提取）")
+    p_post.add_argument("--no-subtitles", action="store_true",
+                        help="跳过字幕烧录")
+    p_post.add_argument("--subtitle-model", default="medium",
+                        choices=["tiny", "base", "small", "medium", "large"],
+                        help="Whisper 模型大小 (默认: medium)")
+    p_post.add_argument("--subtitle-language", default="auto",
+                        help="字幕语言代码 (默认: auto 自动检测)")
+
+    # ─── 字幕烧录一键命令 ───
+    p_burn = subparsers.add_parser(
+        "burn-subs",
+        help="Whisper 提取字幕 + FFmpeg 烧录硬字幕（medium 模型，推荐）",
+        description="等价于: Whisper 提取 SRT → FFmpeg subtitles 滤镜烧录",
+    )
+    p_burn.add_argument("--video", "-v", required=True, metavar="PATH",
+                        help="视频文件路径")
+    p_burn.add_argument("--output", "-o", default=None, metavar="PATH",
+                        help="输出路径（默认: output/原名_subtitled.mp4）")
+    p_burn.add_argument("--srt", default=None, metavar="PATH",
+                        help="指定 SRT 路径（跳过 Whisper 提取）")
+    p_burn.add_argument("--model", default="medium",
+                        choices=["tiny", "base", "small", "medium", "large"],
+                        help="Whisper 模型 (默认: medium)")
+    p_burn.add_argument("--language", default="auto",
+                        help="语言代码 (默认: auto)")
+    p_burn.add_argument("--word-timestamps", action="store_true",
+                        help="启用词级时间戳（精度更高）")
 
     # ─── Phase 5: 发布 ───
     p_publish = subparsers.add_parser("publish", help="[阶段 5] 自动化分发到主流视频平台 (需配置 Cookies)")
@@ -538,6 +656,8 @@ ClawReel - AI 短视频内容自动化流水线 (FinOps 成本优化版)
                 await cmd_post(args)
             elif args.command == "publish":
                 await cmd_publish(args)
+            elif args.command == "burn-subs":
+                await cmd_burn_subs(args)
         except Exception as e:
             logger.exception("命令执行失败: %s", args.command)
             print_json({"success": False, "error": str(e)})

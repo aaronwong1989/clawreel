@@ -22,6 +22,11 @@ T = TypeVar("T")
 def run_ffmpeg(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
     """执行 FFmpeg/FFprobe 命令。
 
+    FFmpeg 有时在成功完成时也返回非零退出码（如被 SIGPIPE/SIGTERM 信号杀死），
+    所以这里采用双重策略：
+    1. 检查 stderr 中是否有 FFmpeg 明确的错误特征
+    2. 检查输出文件是否实际生成（即使退出码非零）
+
     Args:
         cmd: 命令参数列表
         check: 是否检查返回码
@@ -30,7 +35,17 @@ def run_ffmpeg(cmd: list[str], check: bool = True) -> subprocess.CompletedProces
         CompletedProcess 对象
     """
     logger.debug("CMD: %s", " ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True, check=check)
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    # FFmpeg 明确错误特征：[ERROR] 大写 / Error: 前缀 / cannot / no such
+    stderr_lc = result.stderr or ""
+    has_ffmpeg_error = (
+        "[ERROR]" in stderr_lc
+        or re.search(r"(?i)\berror:", stderr_lc)
+        or re.search(r"\bcannot\b|\bno such\b", stderr_lc)
+    )
+    has_error = result.returncode != 0 and has_ffmpeg_error
+    if has_error and check:
+        raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
     if result.stderr:
         logger.debug("CMD stderr: %s", result.stderr[:500])
     return result

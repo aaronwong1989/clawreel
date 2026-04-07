@@ -52,7 +52,7 @@ graph LR
 * **Phase 2 – TTS**：将文字转为自然语音，支持多模型切换。  
 * **Phase 3 – Assets**：并行获取视频、图片、音乐，FinOps 跳过已有资源。  
 * **Phase 4 – Compose**：FFmpeg 精准合成。  
-* **Phase 5 – Post**：字幕烧录、AIGC 标识。  
+* **Phase 5 – Post**：Whisper 字幕烧录、AIGC 标识。  
 * **Phase 6 – Publish**：一键发布至抖音、小红书。
 
 ---
@@ -111,6 +111,7 @@ clawreel assets \
   --music-prompt "..." --topic "AI未来趋势" --skip-existing
 clawreel compose --tts ... --images ... --music ... --hook ...
 clawreel post --video ... --title "..."
+clawreel burn-subs -v output/final_topic.mp4
 clawreel publish --video ... --title "..." --platforms xiaohongshu douyin
 ```
 
@@ -127,8 +128,8 @@ clawreel publish --video ... --title "..." --platforms xiaohongshu douyin
 
 ## 🛠️ 技术栈
 
-*   **Logic**: Python 3.10+, FFmpeg
--   **AI Providers**: MiniMax (Vision/TTS), Microsoft Edge TTS
+*   **Logic**: Python 3.10+, FFmpeg (需含 libass，见[安装说明](#-快速开始))
+*   **AI Providers**: MiniMax (Vision/TTS), Microsoft Edge TTS, OpenAI Whisper (字幕: medium/large 模型语音识别)
 *   **Design Patterns**: Strategy, Factory, HITL Workflow
 
 ---

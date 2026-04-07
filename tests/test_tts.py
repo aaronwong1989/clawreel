@@ -18,8 +18,13 @@ async def main():
     print("Testing Edge TTS...")
     edge_path = ASSETS_DIR / "test_edge.mp3"
     try:
-        await generate_voice(text, output_path=edge_path, provider="edge", voice_id="zh-CN-XiaoxiaoNeural")
-        print(f"Edge TTS success: {edge_path}")
+        audio_path, srt_path = await generate_voice(
+            text,
+            output_path=edge_path,
+            provider="edge",
+            voice_id="zh-CN-XiaoxiaoNeural",
+        )
+        print(f"Edge TTS success: {audio_path}, SRT: {srt_path}")
     except Exception as e:
         print(f"Edge TTS failed: {e}")
 

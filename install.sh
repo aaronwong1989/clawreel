@@ -55,13 +55,64 @@ clone_or_pull() {
     fi
 }
 
+# ── FFmpeg (required for video compose + hard subtitle burn) ─────────────────
+check_brew() {
+    if ! command -v brew >/dev/null 2>&1; then
+        warn "Homebrew 未安装，跳过 ffmpeg-full 安装。"
+        warn "如有需要，请手动执行: brew install ffmpeg-full"
+        return 1
+    fi
+    return 0
+}
+
+install_ffmpeg_full() {
+    info "⚙️  检查 FFmpeg (libass 硬字幕烧录依赖)..."
+
+    # 检查 ffmpeg-full 是否已安装且可解析 ass 滤镜
+    FULL="/opt/homebrew/Cellar/ffmpeg-full"
+    if [[ -d "$FULL" ]]; then
+        # 验证 ass 滤镜可用
+        local ffmpeg_bin
+        ffmpeg_bin=$(brew --prefix ffmpeg-full 2>/dev/null || echo "")/bin/ffmpeg
+        if [[ -x "$ffmpeg_bin" ]] && "$ffmpeg_bin" -filters 2>/dev/null | grep -q "^\s\+\.\. ass"; then
+            info "✅ ffmpeg-full (libass) 已就绪"
+            return 0
+        fi
+    fi
+
+    # 检查 PATH 中的 ffmpeg 是否为 full 版本
+    if command -v ffmpeg >/dev/null 2>&1 && \
+       ffmpeg -filters 2>/dev/null | grep -q "^\s\+\.\. ass"; then
+        info "✅ PATH 中的 ffmpeg 已包含 libass"
+        return 0
+    fi
+
+    # 尝试安装/升级 ffmpeg-full
+    if check_brew; then
+        info "📦 安装 ffmpeg-full (包含 libass，支持硬字幕烧录)..."
+        if HOMEBREW_NO_AUTO_UPDATE=1 brew install ffmpeg-full 2>&1; then
+            # 优先用 ffmpeg-full 接管 PATH
+            HOMEBREW_NO_AUTO_UPDATE=1 brew unlink ffmpeg 2>/dev/null || true
+            HOMEBREW_NO_AUTO_UPDATE=1 brew link ffmpeg-full 2>/dev/null || true
+            if ffmpeg -filters 2>/dev/null | grep -q "^\s\+\.\. ass"; then
+                info "✅ ffmpeg-full 安装并配置完成"
+                return 0
+            fi
+        fi
+        warn "ffmpeg-full 安装未成功，软字幕功能仍可用（硬字幕需要 libass）"
+    fi
+}
+
 # ── Core: pip install CLI + deploy skill ─────────────────────────────────────
 do_install() {
     local repo_dir="${1:-.}"
 
     info "🚀 开始安装 ClawReel..."
 
-    # 1. CLI
+    # 1. FFmpeg
+    install_ffmpeg_full
+
+    # 2. CLI
     info "⚙️  安装 clawreel CLI..."
     if pip install -e "$repo_dir" > /dev/null 2>&1; then
         info "✅ CLI 'clawreel' 安装成功"
@@ -69,7 +120,7 @@ do_install() {
         err "❌ pip install -e . 失败，请检查 Python 环境（需要 Python 3.10+）"
     fi
 
-    # 2. Deploy SKILL.md to known agent environments
+    # Deploy SKILL.md to known agent environments
     info "🤖 部署 Skill 到 AI Agent 环境..."
 
     # Determine skill targets

@@ -31,10 +31,14 @@ VIDEO_DURATION_DEFAULT = 6        # 默认视频时长（秒）
 VIDEO_DURATION_MIN = 3            # 最小视频时长
 VIDEO_DURATION_MAX = 30           # 最大视频时长（取决于分辨率）
 
+# ── FFmpeg 编码参数（统一常量）────────────────────────────────────────────────
+FFMPEG_VIDEO_OPTS = ["-c:v", "libx264", "-preset", "fast", "-crf", "23", "-pix_fmt", "yuv420p"]
+
 # ── 音乐参数 ────────────────────────────────────────────────────────────────
 MUSIC_DURATION_DEFAULT = 60      # 默认音乐时长（秒）
 MUSIC_DURATION_MIN = 15          # 最小音乐时长
-MUSIC_DURATION_MAX = 300        # 最大音乐时长（API 限制）
+MUSIC_DURATION_MAX = 300         # 最大音乐时长（API 限制）
+BG_MUSIC_VOLUME = 0.15           # 背景音乐音量（相对 TTS，0.0-1.0）
 
 # ── 封面参数 ────────────────────────────────────────────────────────────────
 COVER_FULL = (720, 1280)
@@ -49,11 +53,14 @@ ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── API 模型名称（默认值） ─────────────────────────────────────────────────────
-MODEL_T2V = "MiniMax-Hailuo-2.3-768P"
-MODEL_I2V = "MiniMax-Hailuo-2.3-Fast-768P"
+MODEL_T2V = "MiniMax-Hailuo-2.3"
+MODEL_I2V = "MiniMax-Hailuo-2.3-Fast"
+# T2V/I2V 统一 fallback 链：T2V 优先，额度耗尽时降级为 I2V（需 input_image），I2V 失败再切回其他 T2V
 VIDEO_MODEL_FALLBACKS = [
-    "MiniMax-Hailuo-2.3-768P",
-    "MiniMax-Hailuo-2.3-Fast-768P"
+    "MiniMax-Hailuo-2.3",       # T2V 首选
+    "MiniMax-Hailuo-2.3-Fast", # I2V（需 input_image）
+    "MiniMax-Hailuo-02",        # T2V 备选
+    "T2V-01",                   # T2V 最后备选
 ]
 MODEL_IMAGE = "image-01"
 MODEL_TTS = "speech-2.8-hd"
@@ -111,6 +118,8 @@ if "music" in _yaml_config:
     _music_cfg = _yaml_config["music"]
     if "duration_default" in _music_cfg:
         MUSIC_DURATION_DEFAULT = _music_cfg["duration_default"]
+    if "bg_volume" in _music_cfg:
+        BG_MUSIC_VOLUME = float(_music_cfg["bg_volume"])
 
 # ── TTS 配置 ─────────────────────────────────────────────────────────────────
 if "tts" in _yaml_config:

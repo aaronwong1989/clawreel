@@ -9,12 +9,26 @@ import logging
 import time
 from pathlib import Path
 
-from .api_client import api_post, download_file, get_session
+from .api_client import api_post, download_file
 from .config import ASSETS_DIR, MODEL_IMAGE
 
 logger = logging.getLogger(__name__)
 
 _IMAGES_DIR = ASSETS_DIR / "images"
+
+
+async def _download_single(output_filename: str, i: int, img_url: str) -> Path | None:
+    """下载单张图片，返回本地路径或 None。"""
+    ext = "png" if ".png" in img_url.lower() else "jpg"
+    fname = f"{output_filename}_{i}.{ext}"
+    out_path = _IMAGES_DIR / fname
+    try:
+        await download_file(img_url, out_path)
+        logger.info("✅ 图片已保存: %s", out_path)
+        return out_path
+    except Exception as e:
+        logger.warning("图片下载失败: %s — %s", img_url, e)
+        return None
 
 
 async def generate_image(
@@ -24,13 +38,22 @@ async def generate_image(
 ) -> list[Path]:
     """生成图片列表。
 
-    Args:
-        prompt: 图片描述
-        output_filename: 输出文件名（不含扩展名）
-        count: 生成数量，1-9
+    Returns:
+        本地图片路径列表（供合成使用）
+    """
+    paths, _ = await generate_image_with_urls(prompt, output_filename, count)
+    return paths
+
+
+async def generate_image_with_urls(
+    prompt: str,
+    output_filename: str | None = None,
+    count: int = 1,
+) -> tuple[list[Path], list[str]]:
+    """生成图片，同时返回本地路径和 OSS URL（供 HITL 展示用）。
 
     Returns:
-        图片路径列表
+        (本地路径列表, OSS URL列表) 元组
     """
     if output_filename is None:
         output_filename = f"image_{int(time.time() * 1000)}"
@@ -38,7 +61,6 @@ async def generate_image(
     _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
     logger.info("🖼️ 正在生成 %d 张图片，prompt: %s", count, prompt[:50])
 
-    # 官方字段: model, prompt, n, aspect_ratio
     result = await api_post(
         endpoint="/image_generation",
         payload={
@@ -49,34 +71,18 @@ async def generate_image(
         },
     )
 
-    # 官方返回: data.image_urls（数组）
     image_urls = result.get("data", {}).get("image_urls", [])
     if not image_urls:
         raise RuntimeError(f"Image API 返回无图片: {result}")
 
-    # 并行下载所有图片
-
-    async def _download_single(i: int, img_url: str) -> Path | None:
-        """下载单张图片。"""
-        ext = "png"
-        fname = f"{output_filename}_{i}.{ext}"
-        out_path = _IMAGES_DIR / fname
-        try:
-            await download_file(img_url, out_path)
-            logger.info("✅ 图片已保存: %s", out_path)
-            return out_path
-        except Exception as e:
-            logger.warning("图片下载失败: %s — %s", img_url, e)
-            return None
-
-    tasks = [_download_single(i, url) for i, url in enumerate(image_urls)]
+    tasks = [_download_single(output_filename, i, url) for i, url in enumerate(image_urls)]
     results = await asyncio.gather(*tasks)
     paths = [p for p in results if p is not None]
 
     if len(paths) == 0:
         raise RuntimeError("所有图片下载失败，请检查网络或图片 URL 是否可访问")
 
-    return paths
+    return paths, image_urls
 
 
 async def generate_cover(

@@ -7,7 +7,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from .api_client import api_post, poll_async_task
+from .api_client import api_post, download_file, poll_async_task
 from .config import ASSETS_DIR, AUDIO_BIT_RATE, AUDIO_SAMPLE_RATE, MODEL_MUSIC
 
 logger = logging.getLogger(__name__)
@@ -50,9 +50,23 @@ async def generate_music(
         payload=payload,
     )
 
+    # music-2.5 同步完成状态码（无需轮询）
+    _SYNC_COMPLETE = 2
+    data = result.get("data")
+    if data and data.get("audio") and data.get("status") == _SYNC_COMPLETE:
+        # 立即返回结果 (music-2.5 常见)
+        audio_url = data["audio"]
+        logger.info("✅ 音乐已即时生成: %s", audio_url)
+        
+        # 下载并保存
+        await download_file(audio_url, output_path)
+        logger.info("✅ 音乐已保存到: %s", output_path)
+        return output_path
+
     task_id = result.get("task_id")
     if not task_id:
-        raise RuntimeError(f"Music 提交无 task_id: {result}")
+        raise RuntimeError(f"Music 提交无 task_id 或立即结果: {result}")
+    
     logger.info("🎵 音乐任务已提交，task_id: %s", task_id)
 
     async def _extractor(res, session, out_path):

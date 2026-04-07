@@ -1,120 +1,240 @@
-"""阶段2a：视频生成 — 使用统一 api_client。
+"""阶段2a：视频生成 — I2V 优先，T2V fallback。
 
-T2V: MiniMax-Hailuo-02
-I2V: MiniMax-Hailuo-2.3-Fast
+策略：
+  1. 若有首帧图片 → 优先用 I2V（质量更高，与图片风格一致）
+  2. I2V 失败（不支持/额度耗尽）→ 降级 T2V
+  3. T2V 失败 → 换下一个模型重试
+  4. 全失败 → 报错
 
-异步提交 + 轮询等待完成。
-官方状态: Preparing / Queueing / Processing / Success / Fail
+Fallback 链: MiniMax-Hailuo-2.3 (I2V/T2V) → MiniMax-Hailuo-2.3-Fast (I2V)
+            → MiniMax-Hailuo-02 (T2V) → T2V-01 (T2V)
 """
 import aiohttp
 import asyncio
 import hashlib
 import logging
 from pathlib import Path
-from typing import Literal
 
 from .api_client import api_post, api_get, poll_async_task
-from .config import ASSETS_DIR, MODEL_T2V, MODEL_I2V, VIDEO_MODEL_FALLBACKS, VIDEO_FPS
+from .config import ASSETS_DIR, MODEL_T2V, VIDEO_MODEL_FALLBACKS, VIDEO_FPS
 
 logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL = 5
 _MAX_WAIT_SEC = 300
 
+# I2V-only 模型（不支持 T2V，收到 2013 时必须切换 I2V 模式）
+_I2V_ONLY_MODELS = {"MiniMax-Hailuo-2.3-Fast"}
+
+# 支持 T2V 的模型（可同时做 I2V）
+_T2V_CAPABLE_MODELS = {"MiniMax-Hailuo-2.3", "MiniMax-Hailuo-02", "T2V-01"}
+
+
+# ── 错误分类 ──────────────────────────────────────────────────────────────────
+
+class VideoRetryableError(Exception):
+    """可重试的视频生成错误（额度耗尽/套餐不支持等）。"""
+
+    def __init__(self, code: int, msg: str):
+        self.code = code
+        self.msg = msg
+        super().__init__(f"{code} — {msg}")
+
+
+class VideoModeSwitchError(Exception):
+    """T2V 不支持，需切换 I2V 模式（有首帧时）。"""
+
+    pass
+
+
+# ── 核心生成逻辑 ─────────────────────────────────────────────────────────────
 
 async def generate_video(
     prompt: str,
-    type: Literal["t2v", "i2v"] = "t2v",
+    type: str = "t2v",
     duration: int = 6,
     input_image: str | None = None,
     output_filename: str | None = None,
 ) -> Path:
-    """生成视频（T2V 或 I2V），支持模型 Fallback。"""
-    if type == "i2v" and not input_image:
-        raise ValueError("I2V 模式需要提供 input_image 参数（图片 URL 或本地路径）")
+    """生成视频 — I2V 优先（用首帧），I2V 失败再降级 T2V。
 
-    primary_model = MODEL_T2V if type == "t2v" else MODEL_I2V
-    
-    # 构造待尝试的模型列表：[首选模型] + [fallback中的其他模型]
-    models_to_try = [primary_model]
-    for fb_model in VIDEO_MODEL_FALLBACKS:
-        if fb_model not in models_to_try:
-            models_to_try.append(fb_model)
+    Args:
+        prompt:         视频描述
+        type:          "t2v" 或 "i2v"（hint，不影响实际 fallback 策略）
+        duration:      视频时长（秒）
+        input_image:   I2V 首帧图片（本地路径 / MiniMax OSS URL）
+        output_filename: 输出文件名
+    """
+    models_to_try = list(dict.fromkeys([MODEL_T2V] + VIDEO_MODEL_FALLBACKS))
 
     if output_filename is None:
-        output_filename = f"video_{type}_{hashlib.md5(prompt.encode()).hexdigest()[:8]}.mp4"
-
+        output_filename = f"video_{hashlib.md5(prompt.encode()).hexdigest()[:8]}.mp4"
     output_path = ASSETS_DIR / output_filename
-    
-    last_error = None
+
+    # MiniMax OSS URL 直连，无需上传；本地路径暂不支持
+    first_frame: str | None = input_image if input_image else None
+
+    last_error: Exception | None = None
+
     for model in models_to_try:
-        try:
-            logger.info("🎬 正在使用模型 %s 生成 %s 视频 (prompt: %s)", model, type.upper(), prompt[:50])
+        # ── 策略选择 ──────────────────────────────────────────────────────────
+        if first_frame:
+            # 有首帧 → 优先 I2V
+            result = await _try_i2v_then_t2v(model, prompt, duration, first_frame, output_path)
+            if result:
+                return result
+        else:
+            # 无首帧 → 直接 T2V
+            result = await _try_t2v(model, prompt, duration, output_path)
+            if result:
+                return result
 
-            payload: dict = {
-                "model": model,
-                "prompt": prompt,
-                "duration": duration,
-                "fps": VIDEO_FPS,
-                "resolution": "768P",
-            }
-            if input_image:
-                payload["first_frame_image"] = input_image
+    raise RuntimeError(f"所有视频模型尝试均告失败。最后一次错误: {last_error}")
 
-            # 提交任务
-            result = await api_post(endpoint="/video_generation", payload=payload)
-            task_id = result.get("task_id")
-            if not task_id:
-                raise RuntimeError(f"视频提交无 task_id: {result}")
-            
-            logger.info("📹 视频任务已提交 (model: %s), task_id: %s", model, task_id)
 
-            async def _extractor(res, session, out_path):
-                status = res.get("status", "")
-                logger.debug("视频任务状态: %s", status)
-                
-                if status == "Success":
-                    file_id = res.get("file_id")
-                    if not file_id:
-                        return False, None, f"视频完成但无 file_id: {res}"
-                        
-                    file_result = await api_get(
-                        endpoint="/files/retrieve",
-                        params={"file_id": file_id},
-                        session=session,
-                    )
-                    video_url = file_result.get("file", {}).get("download_url")
-                    if not video_url:
-                        return False, None, f"文件检索无 download_url: {file_result}"
-                    
-                    logger.info("✅ 视频生成完成: %s", out_path)
-                    return True, video_url, None
-                    
-                elif status == "Fail":
-                    base = res.get("base_resp", {})
-                    return False, None, f"{base.get('status_code')} — {base.get('status_msg')}"
-                    
-                return False, None, None
+async def _try_i2v_then_t2v(
+    model: str,
+    prompt: str,
+    duration: int,
+    first_frame: str,
+    output_path: Path,
+) -> Path | None:
+    """优先 I2V，失败后降级 T2V（有首帧时）。"""
+    # ① 尝试 I2V（所有模型都支持）
+    try:
+        task_id = await _submit(model, prompt, duration, first_frame=first_frame)
+        logger.info("📹 I2V 任务已提交 (model: %s, 首帧: %s), task_id: %s",
+                    model, _short_url(first_frame), task_id)
+        return await _poll(task_id, output_path)
+    except VideoModeSwitchError:
+        logger.info("🔄 模型 %s 不支持当前调用，切换模式重试...", model)
+    except VideoRetryableError as e:
+        logger.warning("⚠️ I2V %s 失败（%s），降级 T2V...", model, e)
 
-            # 轮询任务
-            return await poll_async_task(
-                task_id=task_id,
-                query_endpoint="/query/video_generation",
-                output_path=output_path,
-                result_extractor=_extractor,
-                max_wait_sec=_MAX_WAIT_SEC,
-                poll_interval=_POLL_INTERVAL
+    # ② I2V 失败 → 降级 T2V（仅 T2V 模型支持）
+    if model not in _T2V_CAPABLE_MODELS:
+        logger.info("  模型 %s 不支持 T2V，跳过", model)
+        return None
+
+    try:
+        task_id = await _submit(model, prompt, duration, first_frame=None)
+        logger.info("📹 T2V 任务已提交 (model: %s), task_id: %s", model, task_id)
+        return await _poll(task_id, output_path)
+    except VideoRetryableError as e:
+        logger.warning("⚠️ T2V %s 也失败: %s", model, e)
+    except VideoModeSwitchError:
+        # T2V 模型收到 T2V 不支持？理论上不应该发生
+        logger.warning("⚠️ T2V 模型 %s 不支持 T2V？跳过", model)
+
+    return None
+
+
+async def _try_t2v(
+    model: str,
+    prompt: str,
+    duration: int,
+    output_path: Path,
+) -> Path | None:
+    """直接 T2V（无首帧时）。"""
+    if model in _I2V_ONLY_MODELS:
+        logger.info("  模型 %s 仅支持 I2V，无首帧，跳过", model)
+        return None
+
+    try:
+        task_id = await _submit(model, prompt, duration, first_frame=None)
+        logger.info("📹 T2V 任务已提交 (model: %s), task_id: %s", model, task_id)
+        return await _poll(task_id, output_path)
+    except VideoModeSwitchError:
+        # T2V 模型收到 "不支持 T2V" → 理论上不可能，忽略
+        logger.warning("⚠️ T2V 模型 %s 收到 T2V 不支持错误，跳过", model)
+    except VideoRetryableError as e:
+        logger.warning("⚠️ T2V %s 失败: %s", model, e)
+
+    return None
+
+
+def _short_url(url: str) -> str:
+    """截断 URL 用于日志显示。"""
+    if len(url) > 40:
+        return url[:20] + "..." + url[-20:]
+    return url
+
+
+# ── 任务提交 ─────────────────────────────────────────────────────────────────
+
+async def _submit(
+    model: str,
+    prompt: str,
+    duration: int,
+    first_frame: str | None,
+) -> str:
+    """提交视频生成任务，返回 task_id。"""
+    payload: dict = {
+        "model": model,
+        "prompt": prompt,
+        "duration": duration,
+        "fps": VIDEO_FPS,
+        "resolution": "768P",
+    }
+    if first_frame:
+        payload["first_frame_image"] = first_frame
+
+    result = await api_post(endpoint="/video_generation", payload=payload)
+    task_id = result.get("task_id")
+    if task_id:
+        return task_id
+
+    base = result.get("base_resp", {})
+    code = base.get("status_code", 0)
+    msg = base.get("status_msg", "unknown")
+
+    # I2V-only 模型收到 "does not support Text-to-Video" → 切换模式
+    if code == 2013 and "does not support Text-to-Video" in msg:
+        raise VideoModeSwitchError(f"{code} — {msg}")
+
+    # 可重试错误
+    retryable = {2013, 2056, 2061, 9013, 9014, 5001, 5002}
+    if code in retryable:
+        raise VideoRetryableError(code, msg)
+
+    raise RuntimeError(f"视频提交失败（不可重试）: {result}")
+
+
+# ── 轮询 ─────────────────────────────────────────────────────────────────────
+
+async def _poll(task_id: str, output_path: Path) -> Path:
+    """轮询并等待视频生成完成。"""
+
+    async def extractor(res, session, out_path):
+        status = res.get("status", "")
+        logger.debug("视频任务状态: %s", status)
+
+        if status == "Success":
+            file_id = res.get("file_id")
+            if not file_id:
+                return False, None, f"视频完成但无 file_id: {res}"
+            file_result = await api_get(
+                endpoint="/files/retrieve",
+                params={"file_id": file_id},
+                session=session,
             )
+            video_url = file_result.get("file", {}).get("download_url")
+            if not video_url:
+                return False, None, f"文件检索无 download_url: {file_result}"
+            logger.info("✅ 视频生成完成: %s", out_path)
+            return True, video_url, None
 
-        except asyncio.CancelledError:
-            raise  # 不要吞掉取消异常
-        except (aiohttp.ClientError, TimeoutError, ConnectionError) as e:
-            # 可重试的临时错误：网络问题、超时等
-            logger.warning("⚠️ 模型 %s 临时失败: %s. 尝试下一个 Fallback 模型...", model, e)
-            last_error = e
-            continue
-        except Exception as e:
-            # 不可重试的错误（参数错误、认证失败等），立即失败
-            raise RuntimeError(f"❌ 模型 {model} 不可用: {e}") from e
-            
-    raise RuntimeError(f"❌ 所有视频模型尝试均告失败。最后一次错误: {last_error}")
+        if status == "Fail":
+            base = res.get("base_resp", {})
+            return False, None, f"{base.get('status_code')} — {base.get('status_msg')}"
+
+        return False, None, None
+
+    return await poll_async_task(
+        task_id=task_id,
+        query_endpoint="/query/video_generation",
+        output_path=output_path,
+        result_extractor=extractor,
+        max_wait_sec=_MAX_WAIT_SEC,
+        poll_interval=_POLL_INTERVAL,
+    )

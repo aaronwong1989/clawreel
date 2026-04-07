@@ -51,7 +51,7 @@ async def get_session() -> aiohttp.ClientSession:
     global _client_session, _session_lock
     if _client_session is None or _client_session.closed:
         _client_session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=60),
+            timeout=aiohttp.ClientTimeout(total=300),
         )
     try:
         yield _client_session
@@ -152,7 +152,6 @@ async def download_file(url: str, output_path: Path) -> Path:
                 async for chunk in resp.content.iter_chunked(8192):
                     f.write(chunk)
     return output_path
-
 
 # ── Anthropic 兼容接口（用于 M2.7 等）───────────────────────────────────────
 _ANTHROPIC_BASE_URL = "https://api.minimaxi.com/anthropic"
