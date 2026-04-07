@@ -1,4 +1,4 @@
-![ClawReel Hero](assets/hero.png)
+![ClawReel Hero](assets/hero.webp)
 
 # ClawReel: The AI Short-Video Production Factory
 
@@ -21,26 +21,35 @@
 
 ---
 
-## 🔄 工作流 (The Workflow)
+## 🔄 工作流概览 (Workflow Overview)
 
-ClawReel 将复杂的视频制作解构为 5 个原子化的阶段，支持断点续作与资源复用：
+**ClawReel** 将完整的视频创作拆解为 **6 个可独立执行的阶段**，Phase 0 为强制性的零成本资源检查，后续每个阶段均支持 HITL 审核点、断点续作与资源复用。
 
 ```mermaid
 graph LR
-    A[Stage 0: Script] --> B[Stage 1: TTS]
-    B --> C[Stage 2: Assets]
-    C --> D[Stage 3: Compose]
-    D --> E[Stage 4: Publish]
-    
-    style A fill:#f9f,stroke:#333,stroke-width:2px
-    style E fill:#00ff00,stroke:#333,stroke-width:2px
+    A[Phase 0: Check] --> B[Phase 1: Script]
+    B --> C[Phase 2: TTS]
+    C --> D[Phase 3: Assets]
+    D --> E[Phase 4: Compose]
+    E --> F[Phase 5: Post]
+    F --> G[Phase 6: Publish]
+
+    style A fill:#ffccff,stroke:#333,stroke-width:2px
+    style B fill:#c2e0ff,stroke:#333,stroke-width:2px
+    style C fill:#d1e8ff,stroke:#333,stroke-width:2px
+    style D fill:#ffe4b5,stroke:#333,stroke-width:2px
+    style E fill:#d1ffd6,stroke:#333,stroke-width:2px
+    style F fill:#ffe4cc,stroke:#333,stroke-width:2px
+    style G fill:#b0ffb0,stroke:#333,stroke-width:2px
 ```
 
-1.  **脚本生成**：基于主题生成爆款剧本、口播词及视觉提示词。
-2.  **语音合成**：多供应商支持 (MiniMax / Edge)，灵活切换音质与成本。
-3.  **视觉与音频素材**：并行请求 T2V 视频、AI 绘图与 AI 音乐，支持旧资源智能重用。
-4.  **合成与后处理**：FFmpeg 驱动的精准对齐、转场与音视频合并。
-5.  **多平台分发**：支持一键推送到 抖音、小红书 等主流平台。
+* **Phase 0 – Check** ⚠️ MANDATORY：零成本扫描现有资源，智能判定生成方案。  
+* **Phase 1 – Script**：生成剧本、口播词与视觉提示词。  
+* **Phase 2 – TTS**：将文字转为自然语音，支持多模型切换。  
+* **Phase 3 – Assets**：并行获取视频、图片、音乐，FinOps 跳过已有资源。  
+* **Phase 4 – Compose**：FFmpeg 精准合成。  
+* **Phase 5 – Post**：字幕烧录、AIGC 标识。  
+* **Phase 6 – Publish**：一键发布至抖音、小红书。
 
 ---
 
@@ -48,8 +57,9 @@ graph LR
 
 -   **即插即用 CLI**：通过 `pip install -e .` 安装后，可在任何工作空间直接调用 `clawreel` 命令。
 -   **FinOps 深度优化**：
-    -   `clawreel check`: 零成本扫描物理资源与语义匹配。
-    -   `clawreel assets --skip-existing`: 自动跳过已存在的素材，防止高昂的 API 重复调用。
+    -   `clawreel check --topic "..."`: 零成本扫描现有资源，支持 `--smart` LLM 语义匹配。
+    -   `clawreel assets --topic "..." --skip-existing`: 自动跳过已存在的同主题素材，防止高昂的 API 重复调用。
+    -   `clawreel assets --force`: 强制重新生成，忽略本地缓存。
 -   **策略模式驱动**：分发平台集成完全采用注册字典形式，易于扩展新渠道（如微信视频号）。
 -   **网络层解耦**：所有 API 统一收束，支持异步轮询封装，消除冗余代码。
 
@@ -57,31 +67,47 @@ graph LR
 
 ## 🚀 快速开始
 
-### 1. 一键安装
-你可以使用我们提供的安装脚本，它会自动配置环境、部署 CLI 并安装智能体技能：
+### 一键安装（推荐，一行命令）
 
 ```bash
-# 进入项目目录执行
+curl -fsSL https://raw.githubusercontent.com/hrygo/clawreel/main/install.sh | bash
+```
+
+该脚本自动完成：克隆源码 → 安装 CLI → 部署 Skill 到 Claude Code/OpenClaw/OpenCode 环境。
+
+### 手动安装（可选）
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/hrygo/clawreel && cd clawreel
+
+# 2. 执行安装
 ./install.sh
 ```
 
-### 2. 初始化配置
-项目会在执行目录下寻找 `.env` 和 `config.yaml`。
+### 初始化配置
+
 ```bash
-# 创建并填入你的 API Key
+# 复制环境变量模板并填入 API Key
 cp .env.example .env
+# 编辑 .env，填入 MINIMAX_API_KEY
 ```
 
-### 3. 开始创作
-```bash
-# 智能体建议首先执行 Check (零成本)
-clawreel check --topic "AI未来10年"
+### 开始创作
 
-# 依次执行管线
-clawreel script --topic "AI未来10年"
-clawreel tts --text "..."
-clawreel assets --hook-prompt "..." --image-prompt "..." --count 3 --music-prompt "..."
+```bash
+# Phase 0: 零成本资源检查（必须先执行）
+clawreel check --topic "AI未来趋势"
+clawreel check --topic "AI未来趋势" --smart   # LLM 语义模式
+
+# Phase 1-6: 依次执行
+clawreel script --topic "AI未来趋势"
+clawreel tts --text "..." --provider edge
+clawreel assets \
+  --hook-prompt "..." --image-prompt "..." --count 3 \
+  --music-prompt "..." --topic "AI未来趋势" --skip-existing
 clawreel compose --tts ... --images ... --music ... --hook ...
+clawreel post --video ... --title "..."
 clawreel publish --video ... --title "..." --platforms xiaohongshu douyin
 ```
 
