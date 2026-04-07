@@ -197,7 +197,12 @@ clawreel post \
 ```
 
 - **字幕烧录**：Whisper 语音识别（medium 模型）+ FFmpeg subtitles 滤镜烧录硬字幕
+- **流选择保护**：CLI 已内置 `-map 0:v -map 0:a`，确保音视频流不混淆
 - AIGC 水印（如已配置）
+
+> ⚠️ **字幕烧录说明**：CLI 已自动处理以下边界情况，无需手动指定：
+> - 显式映射视频/音频流，避免 FFmpeg 选错 AAC 流为视频
+> - 时长验证，输出异常时自动降级为 mov_text 软字幕
 
 ### 字幕烧录一键命令
 
@@ -283,6 +288,77 @@ clawreel assets --hook-prompt "..." --music-prompt "..." --topic "topic" --skip-
 4. **I2V 首帧必须用户选** — 不能随机取第一张
 5. **多图转场** — 正文用 9-15 张图，fade 转场，避免单调
 6. **发布确认** — Phase 6 必须等待用户明确确认
+
+---
+
+## 常见问题排查
+
+### 视频合成后只有几秒 / 字幕烧录后时长异常
+
+**症状**：`clawreel post` 输出的视频时长远短于输入（如 5 秒 vs 56 秒）
+
+**原因**：FFmpeg subtitles 滤镜未指定 `-map` 时，可能将 AAC 音频流误识别为视频流，导致输出截断
+
+**已修复**：CLI v3.0+ 已内置 `-map 0:v -map 0:a` 和时长验证，无需手动处理
+
+**如遇异常**，可手动修复：
+```bash
+# 方案1：强制指定音视频流 + 时长
+ffmpeg -y -i output/composed.mp4 \
+  -vf "subtitles=your.srt:force_style='FontName=PingFang SC,FontSize=22'" \
+  -map 0:v -map 0:a -c:a copy \
+  -t 56.5 \
+  output/final.mp4
+
+# 方案2：降级为软字幕（快速，不丢帧）
+ffmpeg -y -i output/composed.mp4 -i your.srt \
+  -map 0:v -map 0:a -c copy -c:s mov_text \
+  output/final.mp4
+```
+
+### 背景音乐只有开头一段
+
+**原因**：背景音乐时长短于 TTS，循环扩展未正确执行
+
+**检查**：
+```bash
+# 验证音乐和视频时长
+ffprobe -v error -show_entries format=duration -of csv=p=0 assets/bg_music_*.mp3
+ffprobe -v error -show_entries format=duration -of csv=p=0 output/composed.mp4
+```
+
+**修复**：手动扩展音乐
+```bash
+ffmpeg -y -stream_loop 4 -i assets/bg_music_topic.mp3 \
+  -t 56.5 -c:a copy assets/music_extended.mp3
+```
+
+### 中间文件导致合成失败
+
+**症状**：`clawreel compose` 报 "文件不存在" 或片段数量不足
+
+**原因**：中断合成后中间文件被清理，但再次执行时未重新生成
+
+**修复**：清理后重试
+```bash
+rm -rf assets/body_clips assets/body_images assets/body_xfade.mp4
+clawreel compose --tts assets/tts_topic.mp3 ...
+```
+
+### SSL 连接错误（git push / API 调用）
+
+**症状**：`SSL_ERROR_SYSCALL` 或 `Connection reset`
+
+**原因**：网络代理/防火墙干扰
+
+**解决**：
+```bash
+# 检查代理设置
+echo $http_proxy $https_proxy
+
+# 或使用 SSH 代替 HTTPS
+git remote set-url origin git@github.com:hrygo/clawreel.git
+```
 
 ---
 

@@ -442,7 +442,7 @@ async def cmd_compose(args):
     srt_path = tts_path.with_suffix(".srt")
     srt_exists = srt_path.exists()
 
-    composed_path, _ = compose(
+    composed_path, _ = await compose(
         tts_path=tts_path,
         image_urls=image_urls,
         music_path=Path(args.music),

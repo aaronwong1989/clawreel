@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 
 from .config import COVER_FULL, COVER_VISIBLE, FFMPEG_VIDEO_OPTS, OUTPUT_DIR, AIGC_CONFIG
-from .utils import ensure_parent_dir, run_ffmpeg as _run_ffmpeg
+from .utils import ensure_parent_dir, run_ffmpeg as _run_ffmpeg, get_media_duration
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,7 @@ def _burn_subtitles(video_path: Path, srt_path: Path, output_path: Path) -> Path
     video_abs = str(video_path.resolve())
     srt_abs = str(srt_path.resolve())
     out_abs = str(output_path.resolve())
+    input_duration = get_media_duration(video_path)
 
     # 字体：系统带的中文字体
     font_name = "PingFang SC"
@@ -77,11 +78,27 @@ def _burn_subtitles(video_path: Path, srt_path: Path, output_path: Path) -> Path
             f"subtitles={srt_abs}:force_style='FontName={font_name},FontSize=22,"
             f"PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,Outline=2'",
             *FFMPEG_VIDEO_OPTS,
+            "-map", "0:v",          # 明确选择视频流（避免选错 AAC 流）
+            "-map", "0:a",          # 明确选择音频流
             "-c:a", "copy",
+            "-t", str(input_duration),  # 确保不截断视频
             out_abs,
         ])
         if output_path.exists() and output_path.stat().st_size > 0:
-            subtitles_ok = True
+            # 验证输出时长是否正确（容许 1 秒误差）
+            output_duration = get_media_duration(output_path)
+            if output_duration > 0 and output_duration >= input_duration - 1.0:
+                subtitles_ok = True
+                logger.debug(
+                    "✅ 字幕烧录验证通过: 输入%.1fs → 输出%.1fs",
+                    input_duration, output_duration
+                )
+            else:
+                logger.warning(
+                    "⚠️ 字幕烧录输出时长异常: 输入%.1fs，输出%s",
+                    input_duration,
+                    f"{output_duration:.1f}s" if output_duration else "获取失败"
+                )
     except subprocess.SubprocessError as e:
         logger.debug("subtitles 滤镜执行失败: %s，尝试 mov_text 封装", e)
 
@@ -89,12 +106,14 @@ def _burn_subtitles(video_path: Path, srt_path: Path, output_path: Path) -> Path
         logger.info("✅ 字幕烧录完成（硬字幕 subtitles）: %s", output_path)
         return output_path
 
-    # 方案 2：mov_text 软字幕封装
+    # 方案 2：mov_text 软字幕封装（降级方案）
     try:
         _run_ffmpeg([
             "ffmpeg", "-y",
             "-i", video_abs,
             "-i", srt_abs,
+            "-map", "0:v",
+            "-map", "0:a",
             "-c", "copy",
             "-c:s", "mov_text",
             out_abs,
