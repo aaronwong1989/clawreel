@@ -27,6 +27,14 @@ VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
 VIDEO_FPS = 25
 VIDEO_BITRATE = "6M"
+VIDEO_DURATION_DEFAULT = 6        # 默认视频时长（秒）
+VIDEO_DURATION_MIN = 3            # 最小视频时长
+VIDEO_DURATION_MAX = 30           # 最大视频时长（取决于分辨率）
+
+# ── 音乐参数 ────────────────────────────────────────────────────────────────
+MUSIC_DURATION_DEFAULT = 60      # 默认音乐时长（秒）
+MUSIC_DURATION_MIN = 15          # 最小音乐时长
+MUSIC_DURATION_MAX = 300        # 最大音乐时长（API 限制）
 
 # ── 封面参数 ────────────────────────────────────────────────────────────────
 COVER_FULL = (720, 1280)
@@ -40,20 +48,24 @@ OUTPUT_DIR = Path.cwd() / "output"
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# ── API 模型名称 ─────────────────────────────────────────────────────────────
-MODEL_T2V = "MiniMax-Hailuo-02"
-MODEL_I2V = "MiniMax-Hailuo-2.3-Fast"
+# ── API 模型名称（默认值） ─────────────────────────────────────────────────────
+MODEL_T2V = "MiniMax-Hailuo-2.3-768P"
+MODEL_I2V = "MiniMax-Hailuo-2.3-Fast-768P"
+VIDEO_MODEL_FALLBACKS = [
+    "MiniMax-Hailuo-2.3-768P",
+    "MiniMax-Hailuo-2.3-Fast-768P"
+]
 MODEL_IMAGE = "image-01"
 MODEL_TTS = "speech-2.8-hd"
 MODEL_MUSIC = "music-2.5+"
 
-# ── TTS 供应商配置 ───────────────────────────────────────────────────────────
+# ── 配置文件加载 ─────────────────────────────────────────────────────────────
 import yaml
 
 # 从当前终端执行目录寻找 config.yaml
 config_file = Path.cwd() / "config.yaml"
 
-# Defaults in case config.yaml is missing
+# TTS Defaults
 TTS_CONFIG = {
     "active_provider": "minimax",
     "providers": {
@@ -69,10 +81,42 @@ TTS_CONFIG = {
     }
 }
 
+# ── 配置文件加载（统一读取一次）──────────────────────────────────────────────
+_yaml_config = {}
 if config_file.exists():
     with open(config_file, "r", encoding="utf-8") as f:
         _yaml_config = yaml.safe_load(f) or {}
-        if "tts" in _yaml_config:
-            TTS_CONFIG.update(_yaml_config["tts"])
+
+# ── MiniMax 模型配置 ──────────────────────────────────────────────────────────
+if "minimax" in _yaml_config:
+    _models = _yaml_config["minimax"].get("models", {})
+    if "t2v" in _models: MODEL_T2V = _models["t2v"]
+    if "i2v" in _models: MODEL_I2V = _models["i2v"]
+    if "image" in _models: MODEL_IMAGE = _models["image"]
+    if "tts" in _models: MODEL_TTS = _models["tts"]
+    if "music" in _models: MODEL_MUSIC = _models["music"]
+
+# ── 视频配置 ─────────────────────────────────────────────────────────────────
+if "video" in _yaml_config:
+    _video_cfg = _yaml_config["video"]
+    if "width" in _video_cfg: VIDEO_WIDTH = _video_cfg["width"]
+    if "height" in _video_cfg: VIDEO_HEIGHT = _video_cfg["height"]
+    if "fps" in _video_cfg: VIDEO_FPS = _video_cfg["fps"]
+    if "bitrate" in _video_cfg: VIDEO_BITRATE = _video_cfg["bitrate"]
+    if "duration_default" in _video_cfg:
+        VIDEO_DURATION_DEFAULT = _video_cfg["duration_default"]
+
+# ── 音乐配置 ─────────────────────────────────────────────────────────────────
+if "music" in _yaml_config:
+    _music_cfg = _yaml_config["music"]
+    if "duration_default" in _music_cfg:
+        MUSIC_DURATION_DEFAULT = _music_cfg["duration_default"]
+
+# ── TTS 配置 ─────────────────────────────────────────────────────────────────
+if "tts" in _yaml_config:
+    TTS_CONFIG.update(_yaml_config["tts"])
+
+# ── AIGC 标识配置 ────────────────────────────────────────────────────────────
+AIGC_CONFIG = _yaml_config.get("aigc")
 
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", TTS_CONFIG.get("active_provider", "minimax"))

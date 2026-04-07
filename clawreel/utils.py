@@ -3,10 +3,14 @@
 所有 FFmpeg、文件操作、API 辅助函数集中于此。
 """
 import logging
+import re
 import subprocess
 import binascii
 from pathlib import Path
 from typing import Callable, Awaitable, TypeVar
+
+# 统一字符类：保留字母、数字、中文（整洁架构：只出现一次）
+CLEAN_CHAR_CLASS_RE = re.compile(r"[^\w\u4e00-\u9fff]+")
 
 logger = logging.getLogger(__name__)
 

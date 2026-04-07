@@ -6,6 +6,7 @@ I2V: MiniMax-Hailuo-2.3-Fast
 异步提交 + 轮询等待完成。
 官方状态: Preparing / Queueing / Processing / Success / Fail
 """
+import aiohttp
 import asyncio
 import hashlib
 import logging
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Literal
 
 from .api_client import api_post, api_get, poll_async_task
-from .config import ASSETS_DIR, MODEL_T2V, MODEL_I2V, VIDEO_FPS
+from .config import ASSETS_DIR, MODEL_T2V, MODEL_I2V, VIDEO_MODEL_FALLBACKS, VIDEO_FPS
 
 logger = logging.getLogger(__name__)
 
@@ -28,66 +29,92 @@ async def generate_video(
     input_image: str | None = None,
     output_filename: str | None = None,
 ) -> Path:
-    """生成视频（T2V 或 I2V）。"""
+    """生成视频（T2V 或 I2V），支持模型 Fallback。"""
     if type == "i2v" and not input_image:
         raise ValueError("I2V 模式需要提供 input_image 参数（图片 URL 或本地路径）")
 
-    model = MODEL_T2V if type == "t2v" else MODEL_I2V
+    primary_model = MODEL_T2V if type == "t2v" else MODEL_I2V
+    
+    # 构造待尝试的模型列表：[首选模型] + [fallback中的其他模型]
+    models_to_try = [primary_model]
+    for fb_model in VIDEO_MODEL_FALLBACKS:
+        if fb_model not in models_to_try:
+            models_to_try.append(fb_model)
+
     if output_filename is None:
         output_filename = f"video_{type}_{hashlib.md5(prompt.encode()).hexdigest()[:8]}.mp4"
 
     output_path = ASSETS_DIR / output_filename
-    logger.info("🎬 正在生成 %s 视频，prompt: %s", type.upper(), prompt[:50])
+    
+    last_error = None
+    for model in models_to_try:
+        try:
+            logger.info("🎬 正在使用模型 %s 生成 %s 视频 (prompt: %s)", model, type.upper(), prompt[:50])
 
-    payload: dict = {
-        "model": model,
-        "prompt": prompt,
-        "duration": duration,
-        "fps": VIDEO_FPS,
-        "resolution": "768P",
-    }
-    if input_image:
-        payload["first_frame_image"] = input_image
+            payload: dict = {
+                "model": model,
+                "prompt": prompt,
+                "duration": duration,
+                "fps": VIDEO_FPS,
+                "resolution": "768P",
+            }
+            if input_image:
+                payload["first_frame_image"] = input_image
 
-    result = await api_post(endpoint="/video_generation", payload=payload)
+            # 提交任务
+            result = await api_post(endpoint="/video_generation", payload=payload)
+            task_id = result.get("task_id")
+            if not task_id:
+                raise RuntimeError(f"视频提交无 task_id: {result}")
+            
+            logger.info("📹 视频任务已提交 (model: %s), task_id: %s", model, task_id)
 
-    task_id = result.get("task_id")
-    if not task_id:
-        raise RuntimeError(f"视频提交无 task_id: {result}")
-    logger.info("📹 视频任务已提交，task_id: %s", task_id)
-
-    async def _extractor(res, session, out_path):
-        status = res.get("status", "")
-        logger.debug("视频任务状态: %s", status)
-        
-        if status == "Success":
-            file_id = res.get("file_id")
-            if not file_id:
-                return False, None, f"视频完成但无 file_id: {res}"
+            async def _extractor(res, session, out_path):
+                status = res.get("status", "")
+                logger.debug("视频任务状态: %s", status)
                 
-            file_result = await api_get(
-                endpoint="/files/retrieve",
-                params={"file_id": file_id},
-                session=session,
-            )
-            video_url = file_result.get("file", {}).get("download_url")
-            if not video_url:
-                return False, None, f"文件检索无 download_url: {file_result}"
-            
-            logger.info("✅ 视频生成完成: %s", out_path)
-            return True, video_url, None
-            
-        elif status == "Fail":
-            base = res.get("base_resp", {})
-            return False, None, f"{base.get('status_code')} — {base.get('status_msg')}"
-            
-        return False, None, None
+                if status == "Success":
+                    file_id = res.get("file_id")
+                    if not file_id:
+                        return False, None, f"视频完成但无 file_id: {res}"
+                        
+                    file_result = await api_get(
+                        endpoint="/files/retrieve",
+                        params={"file_id": file_id},
+                        session=session,
+                    )
+                    video_url = file_result.get("file", {}).get("download_url")
+                    if not video_url:
+                        return False, None, f"文件检索无 download_url: {file_result}"
+                    
+                    logger.info("✅ 视频生成完成: %s", out_path)
+                    return True, video_url, None
+                    
+                elif status == "Fail":
+                    base = res.get("base_resp", {})
+                    return False, None, f"{base.get('status_code')} — {base.get('status_msg')}"
+                    
+                return False, None, None
 
-    return await poll_async_task(
-        task_id=task_id,
-        query_endpoint="/query/video_generation",
-        output_path=output_path,
-        result_extractor=_extractor,
-        max_wait_sec=_MAX_WAIT_SEC,
-        poll_interval=_POLL_INTERVAL
-    )
+            # 轮询任务
+            return await poll_async_task(
+                task_id=task_id,
+                query_endpoint="/query/video_generation",
+                output_path=output_path,
+                result_extractor=_extractor,
+                max_wait_sec=_MAX_WAIT_SEC,
+                poll_interval=_POLL_INTERVAL
+            )
+
+        except asyncio.CancelledError:
+            raise  # 不要吞掉取消异常
+        except (aiohttp.ClientError, TimeoutError, ConnectionError) as e:
+            # 可重试的临时错误：网络问题、超时等
+            logger.warning("⚠️ 模型 %s 临时失败: %s. 尝试下一个 Fallback 模型...", model, e)
+            last_error = e
+            continue
+        except Exception as e:
+            # 不可重试的错误（参数错误、认证失败等），立即失败
+            raise RuntimeError(f"❌ 模型 {model} 不可用: {e}") from e
+            
+    raise RuntimeError(f"❌ 所有视频模型尝试均告失败。最后一次错误: {last_error}")

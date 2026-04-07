@@ -9,16 +9,18 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .config import COVER_FULL, COVER_VISIBLE, OUTPUT_DIR
+from .config import COVER_FULL, COVER_VISIBLE, OUTPUT_DIR, AIGC_CONFIG
+from .utils import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
 
+# 复用 utils.run_ffmpeg，别名以保持向后兼容
+from .utils import run_ffmpeg as _run_ffmpeg
+
 def _run_cmd(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
-    """执行命令."""
-    logger.debug("CMD: %s", " ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True, check=check)
-    return result
+    """执行 FFmpeg 命令（委托给 utils.run_ffmpeg）。"""
+    return _run_ffmpeg(cmd, check=check)
 
 
 def _extract_subtitles_whisper(video_path: Path) -> Path | None:
@@ -69,7 +71,7 @@ def _extract_subtitles_ffprobe(video_path: Path) -> Path | None:
 
 def _burn_subtitles(video_path: Path, srt_path: Path, output_path: Path) -> Path:
     """将 SRT 字幕烧录进视频（burn-in）."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_parent_dir(output_path)
     _run_cmd([
         "ffmpeg", "-y",
         "-i", str(video_path),
@@ -85,20 +87,31 @@ def _burn_subtitles(video_path: Path, srt_path: Path, output_path: Path) -> Path
     return output_path
 
 
-def _add_aigc_watermark(video_path: Path, output_path: Path) -> Path:
+def _add_aigc_watermark(
+    video_path: Path, 
+    output_path: Path, 
+    label: str = "内容由AI生成", 
+    position: str = "bottom-right"
+) -> Path:
     """添加 AIGC 水印标识.
 
-    位置: 右下角
-    文本: 内容由AI生成
+    支持位置: bottom-right (默认), bottom-left, top-right, top-left
     """
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    # 使用 drawtext 添加文字水印
-    # 注意：抖音平台要求标注 AI 生成内容
+    ensure_parent_dir(output_path)
+    
+    pos_map = {
+        "bottom-right": "x=(w-text_w-10):y=(h-text_h-10)",
+        "bottom-left": "x=10:y=(h-text_h-10)",
+        "top-right": "x=(w-text_w-10):y=10",
+        "top-left": "x=10:y=10",
+    }
+    drawtext_pos = pos_map.get(position, pos_map["bottom-right"])
+
     _run_cmd([
         "ffmpeg", "-y",
         "-i", str(video_path),
         "-vf",
-        "drawtext=text='内容由AI生成':fontsize=20:fontcolor=white:borderw=1:bordercolor=black:x=(w-text_w-10):y=(h-text_h-10)",
+        f"drawtext=text='{label}':fontsize=20:fontcolor=white:borderw=1:bordercolor=black:{drawtext_pos}",
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
@@ -144,15 +157,20 @@ async def post_process(
             current = _burn_subtitles(current, srt_path, current.with_suffix("_subtitled.mp4"))
 
     # 2. AIGC 标识
-    if add_aigc:
+    # 如果 AIGC_CONFIG 缺省或没有 label，则不添加（按用户要求：如果缺省则不添加）
+    if add_aigc and AIGC_CONFIG and AIGC_CONFIG.get("label"):
+        label = AIGC_CONFIG.get("label", "内容由AI生成")
+        position = AIGC_CONFIG.get("position", "bottom-right")
         # 水印写入独立临时文件，再复制到 output_path（避免 input==output 覆盖）
         aigc_temp = OUTPUT_DIR / f"_aigc_tmp_{video_path.stem}.mp4"
-        _add_aigc_watermark(current, aigc_temp)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        _add_aigc_watermark(current, aigc_temp, label=label, position=position)
+        ensure_parent_dir(output_path)
         shutil.move(str(aigc_temp), str(output_path))
         current = output_path
     else:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if not (AIGC_CONFIG and AIGC_CONFIG.get("label")):
+            logger.info("ℹ️ AIGC 配置缺省，跳过水印添加")
+        ensure_parent_dir(output_path)
         shutil.copy2(current, output_path)
         current = output_path
 

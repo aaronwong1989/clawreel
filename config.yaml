@@ -6,11 +6,11 @@ minimax:
 
   # API 模型名称（必须带 MiniMax- 前缀）
   models:
-    t2v: "MiniMax-Hailuo-02"      # 视频 T2V，推荐 24-30fps
+    t2v: "MiniMax-Hailuo-2.3"      # 视频 T2V
     i2v: "MiniMax-Hailuo-2.3-Fast" # 视频 I2V 加速版
     image: "image-01"
     tts: "speech-2.8-hd"          # 最新 TTS
-    music: "music-2.5+"           # music-2.5 不支持纯音乐
+    music: "music-2.5"           # music-2.5+ token plan 不支持
 
 tts:
   active_provider: "edge"       # 当前激活的 TTS 供应商: "minimax" 或 "edge"
@@ -24,8 +24,8 @@ tts:
       voice_id: "zh-CN-XiaoxiaoNeural"
 
 audio:
-  sample_rate: 44100             # ❌ 不用 32000
-  bit_rate: 128000                # 128kbps
+  sample_rate: 44100 
+  bit_rate: 128000
   format: "mp3"
 
 video:
@@ -33,7 +33,10 @@ video:
   height: 1920
   fps: 25  # MiniMax Hailuo 推荐 25fps
   bitrate: "6M"                   # 6-8Mbps
-  duration_default: 10            # 秒，最佳性价比
+  duration_default: 6             # 秒，默认 6 秒（可设置 3-30）
+
+music:
+  duration_default: 60             # 秒，默认 60 秒（可设置 15-300）
 
 cover:
   resolution: [720, 1280]
@@ -54,6 +57,6 @@ publish:
     cookies: "${DOUYIN_COOKIES}"
 
 # AIGC 标识
-aigc:
-  label: "内容由 Sysphis AI 生成"
-  position: "bottom-right"
+# aigc:
+#   label: "内容由 Sysphis AI 生成"
+#   position: "bottom-right"

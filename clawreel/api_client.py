@@ -10,6 +10,7 @@
 """
 import hashlib
 import time
+import asyncio
 import logging
 import contextlib
 from pathlib import Path
@@ -159,6 +160,59 @@ async def download_file(url: str, output_path: Path) -> Path:
                 async for chunk in resp.content.iter_chunked(8192):
                     f.write(chunk)
     return output_path
+
+
+# ── Anthropic 兼容接口（用于 M2.7 等）───────────────────────────────────────
+_ANTHROPIC_BASE_URL = "https://api.minimaxi.com/anthropic"
+
+
+async def call_anthropic_api(
+    prompt: str,
+    model: str = "MiniMax-M2.7",
+    system: str = "",
+    max_tokens: int = 1024,
+    temperature: float = 0.7,
+) -> str:
+    """统一调用 Anthropic 兼容接口（M2.7 等）。
+
+    Args:
+        prompt: 用户提示词
+        model: 模型名称（默认 MiniMax-M2.7）
+        system: 系统提示词
+        max_tokens: 最大 token 数
+        temperature: 温度参数
+
+    Returns:
+        LLM 返回的文本内容
+
+    Raises:
+        RuntimeError: API 调用失败或返回格式错误
+    """
+    url = f"{_ANTHROPIC_BASE_URL}/v1/messages"
+    headers = {
+        "Authorization": f"Bearer {_get_api_key()}",
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+    }
+    payload = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+    }
+    if system:
+        payload["system"] = system
+
+    result = await api_post(url=url, headers=headers, payload=payload)
+
+    # Anthropic API 返回格式：result.content[0].text
+    content = result.get("content", [])
+    for block in (content or []):
+        if block.get("type") == "text":
+            return block["text"]
+
+    raise RuntimeError(f"Anthropic API 返回无 text: {result}")
 
 
 async def poll_async_task(

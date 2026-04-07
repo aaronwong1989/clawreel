@@ -3,6 +3,7 @@
 模型: image-01，9:16 竖屏。
 官方文档: POST /v1/image_generation
 """
+import asyncio
 import hashlib
 import logging
 import time
@@ -54,8 +55,6 @@ async def generate_image(
         raise RuntimeError(f"Image API 返回无图片: {result}")
 
     # 并行下载所有图片
-    import asyncio
-    _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
     async def _download_single(i: int, img_url: str) -> Path | None:
         """下载单张图片。"""

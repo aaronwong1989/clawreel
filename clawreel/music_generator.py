@@ -27,19 +27,24 @@ async def generate_music(
     logger.info("🎶 正在生成音乐，prompt: %s，时长: %ds", prompt, duration)
 
     # 提交任务
+    payload = {
+        "model": MODEL_MUSIC,
+        "prompt": prompt,
+        "duration": duration,
+        "output_format": "url",
+        "audio_setting": {
+            "sample_rate": AUDIO_SAMPLE_RATE,
+            "bitrate": AUDIO_BIT_RATE,
+        },
+    }
+    
+    # 仅 music-2.5+ 支持 is_instrumental 参数
+    if "music-2.5+" in MODEL_MUSIC:
+        payload["is_instrumental"] = is_instrumental
+        
     result = await api_post(
         endpoint="/music_generation",
-        payload={
-            "model": MODEL_MUSIC,
-            "prompt": prompt,
-            "duration": duration,
-            "is_instrumental": is_instrumental,
-            "output_format": "url",
-            "audio_setting": {
-                "sample_rate": AUDIO_SAMPLE_RATE,
-                "bitrate": AUDIO_BIT_RATE,
-            },
-        },
+        payload=payload,
     )
 
     task_id = result.get("task_id")
