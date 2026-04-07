@@ -13,7 +13,7 @@ minimax:
     music: "music-2.5+"           # music-2.5 不支持纯音乐
 
 tts:
-  active_provider: "minimax"       # 当前激活的 TTS 供应商: "minimax" 或 "edge"
+  active_provider: "edge"       # 当前激活的 TTS 供应商: "minimax" 或 "edge"
   providers:
     minimax:
       voice_id: "female-shaonv"
