@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.config import (
+from clawreel.config import (
     AUDIO_SAMPLE_RATE,
     AUDIO_BIT_RATE,
     COVER_FULL,
@@ -59,7 +59,7 @@ class TestScriptGenerator:
 
     def test_script_data_structure(self):
         """验证 ScriptData 结构."""
-        from src.script_generator import ScriptData
+        from clawreel.script_generator import ScriptData
         data: ScriptData = {
             "title": "测试标题",
             "script": "测试脚本内容",
@@ -77,7 +77,7 @@ class TestTTS:
 
     def test_video_fps(self):
         """视频帧率应为 25fps（MiniMax Hailuo 推荐）."""
-        from src.config import VIDEO_FPS
+        from clawreel.config import VIDEO_FPS
         assert VIDEO_FPS == 25, f"视频帧率应为 25，实际: {VIDEO_FPS}"
 
 
@@ -87,7 +87,7 @@ class TestMusicGenerator:
     def test_is_instrumental_field_name(self):
         """⚠️ 音乐生成 API 字段名是 is_instrumental，不是 instrumental."""
         import inspect
-        from src.music_generator import generate_music
+        from clawreel.music_generator import generate_music
         source = inspect.getsource(generate_music)
         assert "is_instrumental" in source, "music_generator.py 必须使用 is_instrumental 字段"
         assert "instrumental" not in source or "is_instrumental" in source

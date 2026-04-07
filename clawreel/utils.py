@@ -7,7 +7,7 @@ import re
 import subprocess
 import binascii
 from pathlib import Path
-from typing import Callable, Awaitable, TypeVar
+from typing import Callable, Awaitable, TypeVar, TypedDict
 
 # 统一字符类：保留字母、数字、中文（整洁架构：只出现一次）
 CLEAN_CHAR_CLASS_RE = re.compile(r"[^\w\u4e00-\u9fff]+")
@@ -136,6 +136,33 @@ def check_base_resp(result: dict, context: str = "API") -> None:
     if status_code != 0:
         status_msg = base_resp.get("status_msg", "Unknown error")
         raise RuntimeError(f"{context} 错误 {status_code}: {status_msg}")
+
+
+# ── SRT 工具（消除三处重复）───────────────────────────────────────────────
+
+class WordTimestamp(TypedDict):
+    """词级时间戳（来自 Edge TTS SubMaker），集中定义于 utils 避免 TypedDict 重复。"""
+    word: str
+    start_sec: float
+    end_sec: float
+    offset_ms: int
+
+
+def format_srt_timestamp(seconds: float) -> str:
+    """将秒数转为 SRT 时间戳格式 HH:MM:SS,mmm。"""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millis = int((seconds % 1) * 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
+def parse_srt_timestamp(ts: str) -> float:
+    """解析 SRT 时间戳（HH:MM:SS,mmm）为秒数。"""
+    ts = ts.strip().replace(",", ".")
+    parts = ts.split(":")
+    h, m, s = float(parts[0]), float(parts[1]), float(parts[2])
+    return h * 3600 + m * 60 + s
 
 
 def extract_task_id(result: dict, context: str = "Task") -> str:

@@ -85,6 +85,69 @@ async def generate_image_with_urls(
     return paths, image_urls
 
 
+async def generate_segment_images(
+    segments: list[dict],
+    max_concurrent: int = 3,
+) -> list[Path]:
+    """为语义段落列表批量生成图片。
+
+    每段一张图，并发控制避免 API 限流。
+    返回图片路径列表，与 segments 一一对应。
+
+    Args:
+        segments:       ScriptSegment 列表（需含 image_prompt 字段）
+        max_concurrent: 最大并发数，默认 3
+
+    Returns:
+        本地图片路径列表（与 segments 顺序对应）
+        若某段生成失败，该位置为 None，最终抛出 ValueError
+
+    Raises:
+        ValueError: 有效图片少于 2 张，或任意段缺失 image_prompt
+    """
+    if not segments:
+        raise ValueError("segments 不能为空")
+    if any("image_prompt" not in seg or not seg["image_prompt"] for seg in segments):
+        raise ValueError("每段必须包含 non-empty image_prompt 字段")
+
+    _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    logger.info("🖼️ 正在批量生成 %d 张图片，并发上限=%d", len(segments), max_concurrent)
+
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def generate_one(i: int, seg: dict) -> tuple[int, Path | None]:
+        async with semaphore:
+            img_path = _IMAGES_DIR / f"seg_{i:03d}.jpg"
+            try:
+                paths = await generate_image(
+                    prompt=seg["image_prompt"],
+                    output_filename=f"seg_{i:03d}",
+                    count=1,
+                )
+                return i, paths[0] if paths else None
+            except Exception as e:
+                logger.warning("⚠️ 图片 %d 生成失败: %s", i, e)
+                return i, None
+
+    tasks = [generate_one(i, seg) for i, seg in enumerate(segments)]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # 按 index 排序还原顺序，同时计数有效结果
+    ordered: list[Path | None] = [None] * len(segments)
+    valid_count = 0
+    for r in results:
+        if isinstance(r, Exception):
+            continue
+        i, path = r
+        ordered[i] = path
+        valid_count += 1
+
+    if valid_count < 2:
+        raise ValueError(f"有效图片不足 2 张（{valid_count} 张），无法合成视频")
+
+    return ordered
+
+
 async def generate_cover(
     title: str,
     count: int = 3,

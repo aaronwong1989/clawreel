@@ -1,4 +1,4 @@
-![ClawReel Hero](assets/hero.webp)
+![ClawReel Hero](hero.webp)
 
 # ClawReel: The AI Short-Video Production Factory
 
@@ -29,7 +29,7 @@
 %%{init: {'theme': 'base', 'themeVariables': {'fontSize': '16px'}}}%%
 graph LR
     A["✅ Phase 0\nCheck"] --> B["📝 Phase 1\nScript"]
-    B --> C["🔊 Phase 2\nTTS"]
+    B --> C["🔊 Phase 2\nTTS + Align"]
     C --> D["🎨 Phase 3\nAssets"]
     D --> E["🎬 Phase 4\nCompose"]
     E --> F["✨ Phase 5\nPost"]
@@ -47,12 +47,12 @@ graph LR
     class E phase4; class F phase5; class G phase6
 ```
 
-* **Phase 0 – Check** ⚠️ 必做：零成本扫描现有资源，智能判定生成方案。  
-* **Phase 1 – Script**：生成剧本、口播词与视觉提示词。  
-* **Phase 2 – TTS**：将文字转为自然语音，支持多模型切换。  
-* **Phase 3 – Assets**：并行获取视频、图片、音乐，FinOps 跳过已有资源。  
-* **Phase 4 – Compose**：FFmpeg 精准合成。  
-* **Phase 5 – Post**：Whisper 字幕烧录、AIGC 标识。  
+* **Phase 0 – Check** ⚠️ 必做：零成本扫描现有资源，智能判定生成方案。
+* **Phase 1 – Script**：生成剧本与口播词，输出 `|` 分隔的句子列表。
+* **Phase 2 – TTS + Align**：Edge TTS 配音 + 逐词时间戳对齐 → `segments.json`（声音、字幕、画面三同步）。
+* **Phase 3 – Assets**：按 `segments.json` 批量生成图片（每句一张，语义相关）。
+* **Phase 4 – Compose**：FFmpeg 按精确时长合成（不再均分）。
+* **Phase 5 – Post**：FFmpeg SRT 字幕烧录、AIGC 标识。
 * **Phase 6 – Publish**：一键发布至抖音、小红书。
 
 ---
@@ -60,60 +60,59 @@ graph LR
 ## 🌟 核心特性
 
 -   **即插即用 CLI**：通过 `pip install -e .` 安装后，可在任何工作空间直接调用 `clawreel` 命令。
--   **FinOps 深度优化**：
-    -   `clawreel check --topic "..."`: 零成本扫描现有资源，支持 `--smart` LLM 语义匹配。
-    -   `clawreel assets --topic "..." --skip-existing`: 自动跳过已存在的同主题素材，防止高昂的 API 重复调用。
-    -   `clawreel assets --force`: 强制重新生成，忽略本地缓存。
--   **策略模式驱动**：分发平台集成完全采用注册字典形式，易于扩展新渠道（如微信视频号）。
--   **网络层解耦**：所有 API 统一收束，支持异步轮询封装，消除冗余代码。
+-   **语义对齐流水线**：声音、字幕、画面三者精确同步——图片切换时机由 TTS 逐词时间戳决定，每张图内容由对应语句语义生成。
+-   **语义分句**：Edge TTS 自带逐词时间戳（~50ms 精度），无需 Whisper 重转录。
+-   **策略模式驱动**：分发平台集成完全采用注册字典形式，易于扩展新渠道。
 
 ---
 
 ## 🚀 快速开始
 
-### 一键安装（推荐，一行命令）
+### 一键安装（推荐）
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hrygo/clawreel/main/install.sh | bash
 ```
 
-该脚本自动完成：克隆源码 → 安装 CLI → 部署 Skill 到 Claude Code/OpenClaw/OpenCode 环境。
-
-### 手动安装（可选）
+### 语义对齐流水线
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/hrygo/clawreel && cd clawreel
-
-# 2. 执行安装
-./install.sh
-```
-
-### 初始化配置
-
-```bash
-# 设置 MiniMax API Key（视频/图片/音乐/TTS 需要）
-export MINIMAX_API_KEY="your_key_here"
-```
-
-### 开始创作
-
-```bash
-# Phase 0: 零成本资源检查（必须先执行）
+# Phase 0: 资源检查
 clawreel check --topic "AI未来趋势"
-clawreel check --topic "AI未来趋势" --smart   # LLM 语义模式
 
-# Phase 1-6: 依次执行
+# Phase 1: 生成脚本（输出含 sentences）
 clawreel script --topic "AI未来趋势"
-clawreel tts --text "..." --provider edge
-clawreel assets \
-  --hook-prompt "..." --image-prompt "..." --count 3 \
-  --music-prompt "..." --topic "AI未来趋势" --skip-existing
-clawreel compose --tts ... --images ... --music ... --hook ...
-clawreel post --video ... --title "..."
-clawreel burn-subs -v output/final_topic.mp4
-clawreel publish --video ... --title "..." --platforms xiaohongshu douyin
+
+# Phase 2: TTS + 语义对齐 → segments.json
+clawreel align --text "你有没有想过，未来AI会超越人类？| 就在昨天，一件事震惊了所有人。" \
+  --output segments.json --split-long
+
+# Phase 3: 按 segments 批量生成图片（每句一张）
+clawreel assets --segments segments.json --max-concurrent 3
+
+# Phase 4: 精确时长合成
+clawreel compose \
+  --tts assets/tts_output.mp3 \
+  --segments segments.json \
+  --music assets/bg_music.mp3 \
+  --transition fade
+
+# Phase 5: 后期处理
+clawreel post --video output/composed.mp4 --title "AI觉醒"
+
+# 字幕烧录（已有视频的场景）
+clawreel burn-subs -v output/final.mp4
 ```
+
+### AI 模型支持
+
+| 组件 | 模型                 | 说明                                   |
+| ---- | -------------------- | -------------------------------------- |
+| 脚本 | MiniMax M2.7         | Anthropic 兼容接口，输出 `\|` 分隔句子 |
+| 配音 | Edge TTS（免费）     | 逐词时间戳（~50ms），驱动语义对齐      |
+| 图片 | MiniMax image-01     | 9:16 竖屏，每句一张                    |
+| 音乐 | MiniMax music-2.5    | 背景音乐循环扩展                       |
+| 字幕 | Whisper medium/large | 仅 `burn-subs` 场景使用                |
 
 ---
 
@@ -128,9 +127,9 @@ clawreel publish --video ... --title "..." --platforms xiaohongshu douyin
 
 ## 🛠️ 技术栈
 
-*   **Logic**: Python 3.10+, FFmpeg (需含 libass，见[安装说明](#-快速开始))
-*   **AI Providers**: MiniMax (Vision/TTS), Microsoft Edge TTS, OpenAI Whisper (字幕: medium/large 模型语音识别)
-*   **Design Patterns**: Strategy, Factory, HITL Workflow
+*   **Logic**: Python 3.10+, FFmpeg (需含 libass，见[安装说明](#快速开始))
+*   **AI Providers**: MiniMax (Vision/TTS), Microsoft Edge TTS (逐词时间戳), OpenAI Whisper (仅字幕提取)
+*   **Core**: 语义对齐流水线 — 声音、字幕、画面三同步，图片内容由语音语义驱动
 
 ---
 

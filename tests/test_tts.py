@@ -1,41 +1,53 @@
+"""集成测试 — tts_voice 模块（语义对齐流水线版）。"""
 import asyncio
 import logging
 import sys
 from pathlib import Path
 
-# Add src to path
-sys.path.append(str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.tts_voice import generate_voice
-from src.config import ASSETS_DIR
+from clawreel.tts_voice import generate_voice, TTSResult
 
 logging.basicConfig(level=logging.INFO)
 
+
 async def main():
-    text = "你好，这是来自 Edge TTS 的测试声音。很高兴见到你。"
-    
-    # Test Edge TTS
-    print("Testing Edge TTS...")
-    edge_path = ASSETS_DIR / "test_edge.mp3"
+    text = "你有没有想过，未来AI会超越人类？就在昨天，一个AI震惊了科学家。"
+
+    # Edge TTS 必须返回 word_timestamps
+    print("Testing Edge TTS with word_timestamps...")
+    edge_path = Path("assets/test_edge.mp3")
+    srt_path = Path("assets/test_edge.srt")
     try:
-        audio_path, srt_path = await generate_voice(
+        result: TTSResult = await generate_voice(
             text,
             output_path=edge_path,
             provider="edge",
             voice_id="zh-CN-XiaoxiaoNeural",
+            srt_path=srt_path,
         )
-        print(f"Edge TTS success: {audio_path}, SRT: {srt_path}")
+        print(f"✅ Edge TTS: {result['audio_path']}")
+        print(f"   SRT: {result['srt_path']}")
+        print(f"   word_timestamps: {len(result['word_timestamps'])} 个词")
+        assert result["word_timestamps"], "word_timestamps 不应为空"
+        assert all("word" in w and "start_sec" in w and "end_sec" in w for w in result["word_timestamps"]), \
+            "word_timestamps 字段不完整"
+        print(f"   首词: {result['word_timestamps'][0]}")
     except Exception as e:
-        print(f"Edge TTS failed: {e}")
+        print(f"❌ Edge TTS failed: {e}")
+        raise
 
-    # Test MiniMax TTS (optional, might need API key)
-    # print("\nTesting MiniMax TTS...")
-    # minimax_path = ASSETS_DIR / "test_minimax.mp3"
-    # try:
-    #     await generate_voice(text, output_path=minimax_path, provider="minimax")
-    #     print(f"MiniMax TTS success: {minimax_path}")
-    # except Exception as e:
-    #     print(f"MiniMax TTS failed: {e}")
+    # MiniMax TTS 必须抛出 RuntimeError
+    print("\nTesting MiniMax TTS raises RuntimeError...")
+    try:
+        await generate_voice(text, provider="minimax")
+        print("❌ MiniMax TTS should have raised RuntimeError")
+    except RuntimeError as e:
+        print(f"✅ MiniMax TTS correctly raised: {e}")
+    except Exception as e:
+        print(f"❌ MiniMax TTS raised unexpected error: {e}")
+        raise
+
 
 if __name__ == "__main__":
     asyncio.run(main())

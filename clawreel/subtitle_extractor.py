@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from .utils import format_srt_timestamp
+
 logger = logging.getLogger(__name__)
 
 # Whisper 模型大小 → 中文推荐用途
@@ -108,24 +110,11 @@ def extract_subtitles(
 
 
 def _write_srt(segments: list[dict], output_path: Path) -> None:
-    """将 Whisper 结果写入 SRT 文件。
-
-    Args:
-        segments: Whisper 返回的 segments 列表
-        output_path: 输出 SRT 文件路径
-    """
-    def _format_timestamp(seconds: float) -> str:
-        """将秒数转为 SRT 时间戳格式 HH:MM:SS,mmm"""
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        millis = int((seconds % 1) * 1000)
-        return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
-
+    """将 Whisper 结果写入 SRT 文件。"""
     with open(output_path, "w", encoding="utf-8") as f:
         for i, seg in enumerate(segments, start=1):
-            start = _format_timestamp(seg.get("start", 0))
-            end = _format_timestamp(seg.get("end", 0))
+            start = format_srt_timestamp(seg.get("start", 0))
+            end = format_srt_timestamp(seg.get("end", 0))
             text = seg.get("text", "").strip()
             # SRT 索引
             f.write(f"{i}\n")
