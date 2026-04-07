@@ -13,7 +13,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from .config import ASSETS_DIR, OUTPUT_DIR, VIDEO_DURATION_DEFAULT, MUSIC_DURATION_DEFAULT
+from .config import (
+    ASSETS_DIR,
+    OUTPUT_DIR,
+    VIDEO_DURATION_DEFAULT,
+    VIDEO_DURATION_MIN,
+    VIDEO_DURATION_MAX,
+    MUSIC_DURATION_DEFAULT,
+    MUSIC_DURATION_MIN,
+    MUSIC_DURATION_MAX,
+)
 from .utils import CLEAN_CHAR_CLASS_RE as _CLEAN_RE
 from .script_generator import generate_script
 from .tts_voice import generate_voice
@@ -250,7 +259,7 @@ async def cmd_tts(args):
     print_json({"path": str(path)})
 
 
-def _generate_with_finops(
+async def _generate_with_finops(
     name: str,
     output_key: str,
     coro_factory,
@@ -278,9 +287,9 @@ def _generate_with_finops(
     """
     if force_regenerate:
         logger.info(f"🔄 强制重新生成 {name}...")
-        result = safe_task(name, coro_factory())
-        output[output_key] = str(result) if result else None
-        if result:
+        res = await safe_task(name, coro_factory())
+        output[output_key] = str(res) if res else None
+        if res:
             output["generated"].append(name)
         return
 
@@ -294,9 +303,9 @@ def _generate_with_finops(
             logger.info(f"✅ 跳过 {name} 生成，复用: {matched[0]}")
             return
 
-    result = safe_task(name, coro_factory())
-    output[output_key] = str(result) if result else None
-    if result:
+    res = await safe_task(name, coro_factory())
+    output[output_key] = str(res) if res else None
+    if res:
         output["generated"].append(name)
 
 
@@ -327,9 +336,13 @@ async def cmd_assets(args):
     topic = getattr(args, 'topic', None)
     normalized = _normalize_topic(topic) if topic else None
 
-    _generate_with_finops(
+    await _generate_with_finops(
         name="视频", output_key="video",
-        coro_factory=lambda: generate_video(args.hook_prompt, type="t2v", duration=args.video_duration),
+        coro_factory=lambda: generate_video(
+            args.hook_prompt, type="t2v", 
+            duration=args.video_duration,
+            output_filename=f"hook_video_{normalized}.mp4" if normalized else None
+        ),
         glob_pattern="hook_video_*.mp4",
         force_regenerate=force_regenerate, skip_existing=skip_existing,
         normalized=normalized, output=output, safe_task=safe_task, logger=logger,
@@ -361,7 +374,10 @@ async def cmd_assets(args):
 
             if need_count > 0:
                 logger.info(f"📸 生成 {need_count} 张新图片...")
-                new_images = await safe_task("图片", generate_image(args.image_prompt, count=need_count))
+                new_images = await safe_task("图片", generate_image(
+                    args.image_prompt, count=need_count,
+                    output_filename=f"img_{normalized}" if normalized else None
+                ))
                 if new_images:
                     output["images"].extend([str(p) for p in new_images])
                     output["generated"].append(f"{len(new_images)} new images")
@@ -371,9 +387,12 @@ async def cmd_assets(args):
         if output["images"]:
             output["generated"].append(f"{len(output['images'])} images")
 
-    _generate_with_finops(
+    await _generate_with_finops(
         name="音乐", output_key="music",
-        coro_factory=lambda: generate_music(prompt=args.music_prompt, duration=args.music_duration),
+        coro_factory=lambda: generate_music(
+            prompt=args.music_prompt, duration=args.music_duration,
+            output_filename=f"bg_music_{normalized}.mp3" if normalized else None
+        ),
         glob_pattern="bg_music_*.mp3",
         force_regenerate=force_regenerate, skip_existing=skip_existing,
         normalized=normalized, output=output, safe_task=safe_task, logger=logger,

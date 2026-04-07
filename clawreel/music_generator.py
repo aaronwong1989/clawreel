@@ -38,9 +38,12 @@ async def generate_music(
         },
     }
     
-    # 仅 music-2.5+ 支持 is_instrumental 参数
+    # 仅 music-2.5+ 支持 is_instrumental 参数，其他需带 lyrics
     if "music-2.5+" in MODEL_MUSIC:
         payload["is_instrumental"] = is_instrumental
+    else:
+        # music-2.5 强制要求 lyrics
+        payload["lyrics"] = "[Instrumental]"
         
     result = await api_post(
         endpoint="/music_generation",

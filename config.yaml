@@ -10,7 +10,7 @@ minimax:
     i2v: "MiniMax-Hailuo-2.3-Fast" # 视频 I2V 加速版
     image: "image-01"
     tts: "speech-2.8-hd"          # 最新 TTS
-    music: "music-2.5"           # music-2.5+ token plan 不支持
+    music: "music-2.5"           # Token Plan 不支持 music-2.5+，强制降级
 
 tts:
   active_provider: "edge"       # 当前激活的 TTS 供应商: "minimax" 或 "edge"

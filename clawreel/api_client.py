@@ -25,20 +25,12 @@ logger = logging.getLogger(__name__)
 # ── MiniMax API Base URL ────────────────────────────────────────────────────
 # 统一使用 /v1 路径（已通过 TTS 验证，Token Plan 和传统 API 均用 /v1）
 _MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
-_MINIMAX_API_KEY = ""  # 延迟加载，避免循环导入
-
-
-def _get_api_key() -> str:
-    global _MINIMAX_API_KEY
-    if not _MINIMAX_API_KEY:
-        import os
-        _MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "")
-    return _MINIMAX_API_KEY
+from .config import MINIMAX_API_KEY
 
 
 def _build_headers() -> dict:
     return {
-        "Authorization": f"Bearer {_get_api_key()}",
+        "Authorization": f"Bearer {MINIMAX_API_KEY}",
         "Content-Type": "application/json",
     }
 
@@ -190,7 +182,7 @@ async def call_anthropic_api(
     """
     url = f"{_ANTHROPIC_BASE_URL}/v1/messages"
     headers = {
-        "Authorization": f"Bearer {_get_api_key()}",
+        "Authorization": f"Bearer {MINIMAX_API_KEY}",
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
         "anthropic-dangerous-direct-browser-access": "true",
