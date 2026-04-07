@@ -10,17 +10,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# 确保能导入 src
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from src.script_generator import generate_script
-from src.tts_voice import generate_voice
-from src.video_generator import generate_video
-from src.image_generator import generate_image
-from src.music_generator import generate_music
-from src.composer import compose
-from src.post_processor import post_process
-from src.publisher import publish
+from .script_generator import generate_script
+from .tts_voice import generate_voice
+from .video_generator import generate_video
+from .image_generator import generate_image
+from .music_generator import generate_music
+from .composer import compose
+from .post_processor import post_process
+from .publisher import publish
 
 # 禁用基础日志输出到 stdout，以免干扰 JSON 解析
 logging.basicConfig(
@@ -159,10 +156,11 @@ def main():
         finally:
             # 确保关闭 aiohttp session
             try:
-                from src.api_client import close_session
+                from .api_client import close_session
                 await close_session()
             except ImportError:
                 pass
+
 
     asyncio.run(run())
 

@@ -7,10 +7,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
-
-# 项目根目录
-PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+# 优先从当前执行目录加载环境变量
+load_dotenv(Path.cwd() / ".env")
 
 # ── MiniMax API ─────────────────────────────────────────────────────────────
 # Token Plan 统一使用 /v1 路径（TTS 已验证）
@@ -34,9 +32,9 @@ VIDEO_BITRATE = "6M"
 COVER_FULL = (720, 1280)
 COVER_VISIBLE = (1080, 1464)
 
-# ── 输出路径 ────────────────────────────────────────────────────────────────
-ASSETS_DIR = PROJECT_ROOT / "assets"
-OUTPUT_DIR = PROJECT_ROOT / "output"
+# ── 输出路径（基于命令执行所在的目录）────────────────────────────────────────────────
+ASSETS_DIR = Path.cwd() / "assets"
+OUTPUT_DIR = Path.cwd() / "output"
 
 # 确保目录存在
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
@@ -52,7 +50,9 @@ MODEL_MUSIC = "music-2.5+"
 # ── TTS 供应商配置 ───────────────────────────────────────────────────────────
 import yaml
 
-config_file = PROJECT_ROOT / "config.yaml"
+# 从当前终端执行目录寻找 config.yaml
+config_file = Path.cwd() / "config.yaml"
+
 # Defaults in case config.yaml is missing
 TTS_CONFIG = {
     "active_provider": "minimax",
