@@ -1,6 +1,10 @@
-# Skill: Content Pipeline HITL
+---
+name: content-pipeline-hitl
+description: Orchestrate the end-to-end AI video content production pipeline with Human-In-The-Loop (HITL) checkpoints.
+---
 
-Orchestrate the end-to-end AI video content production pipeline with Human-In-The-Loop (HITL) checkpoints.
+# Content Pipeline HITL
+
 
 ## Workflow Overview
 
