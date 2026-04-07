@@ -26,21 +26,25 @@
 **ClawReel** 将完整的视频创作拆解为 **6 个可独立执行的阶段**，Phase 0 为强制性的零成本资源检查，后续每个阶段均支持 HITL 审核点、断点续作与资源复用。
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '16px'}}}%%
 graph LR
-    A[Phase 0: Check] --> B[Phase 1: Script]
-    B --> C[Phase 2: TTS]
-    C --> D[Phase 3: Assets]
-    D --> E[Phase 4: Compose]
-    E --> F[Phase 5: Post]
-    F --> G[Phase 6: Publish]
+    A["✅ Phase 0\nCheck"] --> B["📝 Phase 1\nScript"]
+    B --> C["🔊 Phase 2\nTTS"]
+    C --> D["🎨 Phase 3\nAssets"]
+    D --> E["🎬 Phase 4\nCompose"]
+    E --> F["✨ Phase 5\nPost"]
+    F --> G["🚀 Phase 6\nPublish"]
 
-    style A fill:#ffccff,stroke:#333,stroke-width:2px
-    style B fill:#c2e0ff,stroke:#333,stroke-width:2px
-    style C fill:#d1e8ff,stroke:#333,stroke-width:2px
-    style D fill:#ffe4b5,stroke:#333,stroke-width:2px
-    style E fill:#d1ffd6,stroke:#333,stroke-width:2px
-    style F fill:#ffe4cc,stroke:#333,stroke-width:2px
-    style G fill:#b0ffb0,stroke:#333,stroke-width:2px
+    classDef phase0 fill:#e0e7ff,stroke:#6366f1,stroke-width:2px,color:#333
+    classDef phase1 fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#333
+    classDef phase2 fill:#dcfce7,stroke:#22c55e,stroke-width:2px,color:#333
+    classDef phase3 fill:#fef9c3,stroke:#eab308,stroke-width:2px,color:#333
+    classDef phase4 fill:#ffe4e6,stroke:#f43f5e,stroke-width:2px,color:#333
+    classDef phase5 fill:#f3e8ff,stroke:#a855f7,stroke-width:2px,color:#333
+    classDef phase6 fill:#d1fae5,stroke:#10b981,stroke-width:2px,color:#333
+
+    class A phase0; class B phase1; class C phase2; class D phase3
+    class E phase4; class F phase5; class G phase6
 ```
 
 * **Phase 0 – Check** ⚠️ MANDATORY：零成本扫描现有资源，智能判定生成方案。  
